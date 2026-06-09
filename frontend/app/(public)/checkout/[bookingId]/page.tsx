@@ -6,9 +6,21 @@ import { useEffect, useState } from "react";
 import { HoldCountdown } from "@/components/hold-countdown";
 import { api, Booking, formatIDR } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { isMidtransConfigured, loadMidtransSnap, openMidtransSnap } from "@/lib/midtrans";
 import { Container } from "@/components/ui/container";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+
+async function waitForConfirmation(token: string, bookingId: string, maxAttempts = 15) {
+  for (let i = 0; i < maxAttempts; i++) {
+    await api.syncPayment(token, bookingId);
+    const booking = await api.getBooking(token, bookingId);
+    if (booking.status === "confirmed") return true;
+    if (booking.status === "cancelled" || booking.status === "expired") return false;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return false;
+}
 
 export default function CheckoutPage() {
   const params = useParams<{ bookingId: string }>();
@@ -18,6 +30,7 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [error, setError] = useState("");
+  const midtransReady = isMidtransConfigured();
 
   useEffect(() => {
     if (!isAuthenticated() || !accessToken) {
@@ -35,13 +48,45 @@ export default function CheckoutPage() {
     if (!accessToken || !booking) return;
     setPaying(true);
     setError("");
+
     try {
+      if (midtransReady) {
+        await loadMidtransSnap();
+        const checkout = await api.paymentCheckout(accessToken, booking.id);
+
+        openMidtransSnap(checkout.snap_token, {
+          onSuccess: async () => {
+            setPaying(true);
+            const ok = await waitForConfirmation(accessToken, booking.id);
+            if (ok) {
+              router.push(`/bookings/${booking.id}`);
+            } else {
+              setError("Pembayaran diproses. Cek status di halaman tiket kamu.");
+              setPaying(false);
+            }
+          },
+          onPending: async () => {
+            setError("Pembayaran menunggu konfirmasi. Kami akan memperbarui status otomatis.");
+            await waitForConfirmation(accessToken, booking.id);
+            router.push(`/bookings/${booking.id}`);
+          },
+          onError: () => {
+            setError("Pembayaran gagal atau dibatalkan.");
+            setPaying(false);
+          },
+          onClose: () => {
+            setPaying(false);
+          },
+        });
+        return;
+      }
+
+      // Fallback dev tanpa Midtrans keys
       await api.confirmBooking(accessToken, booking.id);
       await api.simulatePayment(accessToken, booking.id);
       router.push(`/bookings/${booking.id}`);
     } catch {
       setError("Pembayaran gagal. Silakan coba lagi.");
-    } finally {
       setPaying(false);
     }
   };
@@ -114,13 +159,19 @@ export default function CheckoutPage() {
           size="lg"
           className="mt-6"
         >
-          {paying ? "Memproses pembayaran..." : "Bayar Sekarang"}
+          {paying ? "Membuka pembayaran..." : "Bayar Sekarang"}
         </Button>
 
         <p className="mt-4 text-center text-xs leading-relaxed text-stone-400">
-          Mode pengembangan: pembayaran disimulasikan.
-          <br />
-          Di production, kamu akan diarahkan ke gateway pembayaran.
+          {midtransReady ? (
+            <>
+              Pembayaran aman via Midtrans Snap.
+              <br />
+              Sandbox: gunakan kartu test 4811 1111 1111 1114.
+            </>
+          ) : (
+            "Midtrans belum dikonfigurasi — mode simulasi pembayaran aktif."
+          )}
         </p>
       </Container>
     </div>

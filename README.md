@@ -60,10 +60,28 @@ Event demo: `/events/konser-demo-2026`
 ## Alur Booking (MVP)
 
 1. Login → pilih event → pilih tiket
-2. **Hold** inventory (10 menit, Redis-ready architecture)
+2. **Hold** inventory (10 menit)
 3. Checkout + countdown timer
-4. **Simulate payment** (development) → konfirmasi booking
+4. **Bayar via Midtrans Snap** (sandbox) → konfirmasi booking
 5. E-ticket dengan kode unik
+
+### Midtrans Sandbox
+
+Tambahkan ke `.env` dan `frontend/.env.local`:
+
+```env
+MIDTRANS_SERVER_KEY=SB-Mid-server-...
+MIDTRANS_CLIENT_KEY=SB-Mid-client-...
+MIDTRANS_IS_PRODUCTION=false
+NEXT_PUBLIC_MIDTRANS_CLIENT_KEY=SB-Mid-client-...
+NEXT_PUBLIC_MIDTRANS_IS_PRODUCTION=false
+```
+
+Kartu test sandbox: `4811 1111 1111 1114` (CVV `123`, expiry masa depan).
+
+Webhook production: set URL di Midtrans Dashboard → `POST {APP_URL}/api/v1/payments/webhook/midtrans`
+
+Untuk development lokal, status pembayaran disinkronkan otomatis via `POST /payments/sync` setelah Snap sukses (tanpa perlu ngrok).
 
 ## API Endpoints Utama
 
@@ -79,7 +97,10 @@ Event demo: `/events/konser-demo-2026`
 | GET | `/api/v1/events/:slug` | Detail event |
 | POST | `/api/v1/bookings/hold` | Hold tiket |
 | POST | `/api/v1/bookings/:id/confirm` | Mulai pembayaran |
-| POST | `/api/v1/payments/simulate` | Simulasi bayar (dev only) |
+| POST | `/api/v1/payments/checkout` | Buat Snap token Midtrans |
+| POST | `/api/v1/payments/sync` | Sinkron status bayar dari Midtrans |
+| POST | `/api/v1/payments/webhook/midtrans` | Webhook notifikasi Midtrans |
+| POST | `/api/v1/payments/simulate` | Simulasi bayar (fallback tanpa keys) |
 
 ## Perintah Berguna
 

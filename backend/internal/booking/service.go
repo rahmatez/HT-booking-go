@@ -342,6 +342,50 @@ func (s *Service) StartPayment(ctx context.Context, userID, bookingID uuid.UUID)
 	return &updated, nil
 }
 
+func (s *Service) ReleaseOnPaymentFailure(ctx context.Context, bookingID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.queries.WithTx(tx)
+	booking, err := qtx.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		return err
+	}
+
+	if booking.Status != string(db.BookingStatusHeld) && booking.Status != string(db.BookingStatusPendingPayment) {
+		return nil
+	}
+
+	items, err := qtx.ListBookingItems(ctx, bookingID)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		if _, err := qtx.DecrementHeldCount(ctx, db.DecrementHeldCountParams{
+			ID:        item.TicketTypeID,
+			HeldCount: item.Quantity,
+		}); err != nil {
+			return err
+		}
+	}
+
+	var confirmedAt pgtype.Timestamptz
+	_, err = qtx.UpdateBookingStatus(ctx, db.UpdateBookingStatusParams{
+		ID:          bookingID,
+		Status:      string(db.BookingStatusCancelled),
+		ConfirmedAt: confirmedAt,
+	})
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (s *Service) ExpireHeldBooking(ctx context.Context, bookingID uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

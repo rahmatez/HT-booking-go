@@ -173,11 +173,11 @@ func (h *Handler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.OK(w, map[string]interface{}{
-		"booking_id":     booking.ID,
-		"status":         booking.Status,
-		"total_amount":   booking.TotalAmount,
+		"booking_id":      booking.ID,
+		"status":          booking.Status,
+		"total_amount":    booking.TotalAmount,
 		"hold_expires_at": booking.HoldExpiresAt,
-		"payment_url":    "/checkout/" + booking.ID.String(),
-		"message":        "lanjutkan pembayaran (sandbox: gunakan endpoint simulate payment)",
+		"payment_url":     "/checkout/" + booking.ID.String(),
+		"message":         "booking siap dibayar — gunakan POST /payments/checkout untuk Snap token",
 	})
 }

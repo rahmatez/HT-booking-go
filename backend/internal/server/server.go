@@ -18,6 +18,7 @@ import (
 	"github.com/rahmatez/high-traffic-booking/backend/internal/config"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/payment"
+	midtransclient "github.com/rahmatez/high-traffic-booking/backend/internal/payment/midtrans"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/middleware"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/response"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/ticket"
@@ -45,7 +46,9 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 	bookingSvc := booking.NewService(pool, queries, cfg)
 	bookingHandler := booking.NewHandler(bookingSvc)
 
-	paymentHandler := payment.NewHandler(queries, bookingSvc, cfg)
+	mtClient := midtransclient.NewClient(cfg.MidtransServerKey, cfg.MidtransClientKey, cfg.MidtransIsProduction)
+	paymentSvc := payment.NewService(queries, bookingSvc, mtClient, cfg)
+	paymentHandler := payment.NewHandler(paymentSvc, queries, bookingSvc, cfg)
 	ticketHandler := ticket.NewHandler(queries)
 
 	adminSvc := admin.NewService(queries, catalogSvc)
@@ -89,6 +92,8 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 
 		api.Route("/payments", func(pr chi.Router) {
 			pr.Post("/webhook/{gateway}", paymentHandler.Webhook)
+			pr.With(middleware.Auth(jwtSvc)).Post("/checkout", paymentHandler.Checkout)
+			pr.With(middleware.Auth(jwtSvc)).Post("/sync", paymentHandler.Sync)
 			pr.With(middleware.Auth(jwtSvc)).Get("/{id}/status", paymentHandler.GetStatus)
 			pr.With(middleware.Auth(jwtSvc)).Post("/simulate", paymentHandler.SimulatePayment)
 		})

@@ -131,3 +131,54 @@ func (q *Queries) UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStat
 	)
 	return i, err
 }
+
+const getPendingPaymentByBookingID = `-- name: GetPendingPaymentByBookingID :one
+SELECT id, booking_id, gateway, gateway_ref, amount, status, idempotency_key, paid_at, created_at, updated_at FROM payments
+WHERE booking_id = $1 AND status = 'pending'
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+func (q *Queries) GetPendingPaymentByBookingID(ctx context.Context, bookingID uuid.UUID) (Payment, error) {
+	row := q.db.QueryRow(ctx, getPendingPaymentByBookingID, bookingID)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.BookingID,
+		&i.Gateway,
+		&i.GatewayRef,
+		&i.Amount,
+		&i.Status,
+		&i.IdempotencyKey,
+		&i.PaidAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPaymentByOrderID = `-- name: GetPaymentByOrderID :one
+SELECT p.id, p.booking_id, p.gateway, p.gateway_ref, p.amount, p.status, p.idempotency_key, p.paid_at, p.created_at, p.updated_at FROM payments p
+JOIN bookings b ON b.id = p.booking_id
+WHERE b.id::text = $1
+ORDER BY p.created_at DESC
+LIMIT 1
+`
+
+func (q *Queries) GetPaymentByOrderID(ctx context.Context, orderID string) (Payment, error) {
+	row := q.db.QueryRow(ctx, getPaymentByOrderID, orderID)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.BookingID,
+		&i.Gateway,
+		&i.GatewayRef,
+		&i.Amount,
+		&i.Status,
+		&i.IdempotencyKey,
+		&i.PaidAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

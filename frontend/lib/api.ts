@@ -108,6 +108,20 @@ export const api = {
   cancelBooking: (token: string, id: string) =>
     request<{ message: string }>(`/bookings/${id}`, { method: "DELETE", token }),
 
+  paymentCheckout: (token: string, bookingId: string) =>
+    request<PaymentCheckout>("/payments/checkout", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ booking_id: bookingId }),
+    }),
+
+  syncPayment: (token: string, bookingId: string) =>
+    request<{ status: string }>("/payments/sync", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ booking_id: bookingId }),
+    }),
+
   simulatePayment: (token: string, bookingId: string) =>
     request<{ message: string; booking_id: string }>("/payments/simulate", {
       method: "POST",
@@ -263,6 +277,16 @@ export type BookingSummary = {
   total_amount: number;
   hold_expires_at: string;
   created_at: string;
+};
+
+export type PaymentCheckout = {
+  snap_token: string;
+  client_key: string;
+  order_id: string;
+  booking_id: string;
+  total_amount: number;
+  gateway: string;
+  is_production: boolean;
 };
 
 export type Ticket = {

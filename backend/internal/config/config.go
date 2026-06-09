@@ -31,6 +31,7 @@ type Config struct {
 	TicketSigningKey string
 
 	PaymentGateway       string
+	MidtransMerchantID   string
 	MidtransServerKey    string
 	MidtransClientKey    string
 	MidtransIsProduction bool
@@ -61,9 +62,10 @@ func Load() (*Config, error) {
 
 		TicketSigningKey: getEnv("TICKET_SIGNING_KEY", "dev-ticket-signing-key"),
 
-		PaymentGateway:    getEnv("PAYMENT_GATEWAY", "midtrans"),
-		MidtransServerKey: getEnv("MIDTRANS_SERVER_KEY", ""),
-		MidtransClientKey: getEnv("MIDTRANS_CLIENT_KEY", ""),
+		PaymentGateway:     getEnv("PAYMENT_GATEWAY", "midtrans"),
+		MidtransMerchantID: getEnv("MIDTRANS_MERCHANT_ID", ""),
+		MidtransServerKey:  getEnv("MIDTRANS_SERVER_KEY", ""),
+		MidtransClientKey:  getEnv("MIDTRANS_CLIENT_KEY", ""),
 		MidtransIsProduction: getEnvBool("MIDTRANS_IS_PRODUCTION", false),
 
 		EmailProvider: getEnv("EMAIL_PROVIDER", "resend"),
