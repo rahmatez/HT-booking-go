@@ -1,6 +1,8 @@
-# High-Traffic Booking & Ticketing Platform
+# Eventra
 
-Platform booking & ticketing skala besar dengan stack **Golang + PostgreSQL + Redis + Next.js + Tailwind**.
+Platform booking & ticketing event — **Eventra** — dibangun dengan stack **Golang + PostgreSQL + Redis + Next.js + Tailwind**.
+
+> Nama repo folder (`high-traffic-booking`) adalah nama teknis proyek; brand produk adalah **Eventra**.
 
 ## Prasyarat
 
@@ -19,7 +21,7 @@ cp .env.example .env
 make up
 
 # 3. Migrasi database (via psql di container)
-docker exec -i htb-postgres psql -U booking -d booking < backend/migrations/000001_init_schema.up.sql
+docker exec -i eventra-postgres psql -U booking -d booking < backend/migrations/000001_init_schema.up.sql
 
 # 4. Seed data sample
 make seed
@@ -102,6 +104,20 @@ Untuk development lokal, status pembayaran disinkronkan otomatis via `POST /paym
 | POST | `/api/v1/payments/webhook/midtrans` | Webhook notifikasi Midtrans |
 | POST | `/api/v1/payments/simulate` | Simulasi bayar (fallback tanpa keys) |
 
+## Redis (cache, hold lock, rate limit)
+
+| Fitur | Deskripsi |
+|-------|-----------|
+| **Rate limit** | Login, hold booking, checkout — via Redis counter |
+| **Cache** | Event list (60s), detail event (60s), availability (5s) |
+| **Hold lock** | Distributed lock per tipe tiket saat hold + metadata TTL di Redis |
+
+Jalankan integration test race condition (butuh PostgreSQL + Redis):
+
+```bash
+make test-integration
+```
+
 ## Perintah Berguna
 
 ```bash
@@ -110,7 +126,8 @@ make down        # Stop containers
 make seed        # Seed sample data
 make backend     # Run Go API
 make frontend    # Run Next.js dev
-make test        # Run Go tests
+make test        # Run Go unit tests (short)
+make test-integration  # Race condition hold test
 make sqlc        # Regenerate sqlc code
 ```
 
@@ -120,4 +137,5 @@ PostgreSQL Docker menggunakan port **5433** (bukan 5432) untuk menghindari konfl
 
 ## Dokumentasi
 
-Lihat [plan.md](./plan.md) untuk rancangan arsitektur, roadmap, dan keputusan teknis lengkap.
+- [plan.md](./plan.md) — Arsitektur, database, API, roadmap MVP Fase 1  
+- [plan-production.md](./plan-production.md) — Roadmap production (Fase A/B/C) menuju standar platform tiket seperti Loket/Tiket.com

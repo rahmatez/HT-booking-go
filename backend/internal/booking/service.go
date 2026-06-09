@@ -11,11 +11,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/config"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
+	redisutil "github.com/rahmatez/high-traffic-booking/backend/internal/platform/redis"
 )
 
 var (
@@ -37,13 +39,15 @@ type HoldInput struct {
 }
 
 type Service struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
-	cfg     *config.Config
+	pool      *pgxpool.Pool
+	queries   *db.Queries
+	cfg       *config.Config
+	holdStore *redisutil.HoldStore
+	cache     *redisutil.Cache
 }
 
-func NewService(pool *pgxpool.Pool, queries *db.Queries, cfg *config.Config) *Service {
-	return &Service{pool: pool, queries: queries, cfg: cfg}
+func NewService(pool *pgxpool.Pool, queries *db.Queries, cfg *config.Config, holdStore *redisutil.HoldStore, cache *redisutil.Cache) *Service {
+	return &Service{pool: pool, queries: queries, cfg: cfg, holdStore: holdStore, cache: cache}
 }
 
 func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey string, in HoldInput) (*db.Booking, []db.ListBookingItemsRow, error) {
@@ -54,12 +58,20 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 		return nil, nil, fmt.Errorf("at least one item required")
 	}
 
-	existing, err := s.queries.GetBookingByIdempotencyKey(ctx, idempotencyKey)
+	existing, err := s.queries.GetBookingByIdempotencyKeyForUser(ctx, idempotencyKey, userID)
 	if err == nil {
+		if existing.EventID != in.EventID {
+			return nil, nil, ErrIdempotencyConflict
+		}
 		items, _ := s.queries.ListBookingItems(ctx, existing.ID)
 		return &existing, items, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, err
+	}
+
+	aggregated, err := aggregateHoldItems(in.Items)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -82,6 +94,50 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 		return nil, nil, ErrHoldLimitReached
 	}
 
+	ticketTypeIDs := dedupeTicketTypeIDs(aggregated)
+
+	var booking *db.Booking
+	var items []db.ListBookingItemsRow
+
+	holdFn := func() error {
+		b, its, holdErr := s.holdInDB(ctx, userID, idempotencyKey, in)
+		if holdErr != nil {
+			return holdErr
+		}
+		booking = b
+		items = its
+		return nil
+	}
+
+	if s.holdStore != nil {
+		err = s.holdStore.WithTicketLocks(ctx, ticketTypeIDs, 8*time.Second, holdFn)
+	} else {
+		err = holdFn()
+	}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			existing, fetchErr := s.queries.GetBookingByIdempotencyKeyForUser(ctx, idempotencyKey, userID)
+			if fetchErr == nil {
+				items, _ := s.queries.ListBookingItems(ctx, existing.ID)
+				return &existing, items, nil
+			}
+		}
+		return nil, nil, err
+	}
+
+	if s.holdStore != nil {
+		if err := s.holdStore.RegisterHold(ctx, booking.ID, in.EventID, s.cfg.BookingHoldTTL); err != nil {
+			// Non-fatal: DB is source of truth.
+			_ = err
+		}
+	}
+	s.invalidateEventCache(ctx, in.EventID)
+
+	return booking, items, nil
+}
+
+func (s *Service) holdInDB(ctx context.Context, userID uuid.UUID, idempotencyKey string, in HoldInput) (*db.Booking, []db.ListBookingItemsRow, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -90,11 +146,22 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 
 	qtx := s.queries.WithTx(tx)
 
+	aggregated, err := aggregateHoldItems(in.Items)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	event, err := qtx.GetEventByID(ctx, in.EventID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if event.Status != string(db.EventStatusPublished) {
+		return nil, nil, fmt.Errorf("event is not available for booking")
+	}
+
+	typePrices := make(map[uuid.UUID]db.TicketType, len(aggregated))
 	var total int64
-	for _, item := range in.Items {
-		if item.Quantity <= 0 {
-			return nil, nil, fmt.Errorf("invalid quantity")
-		}
+	for _, item := range aggregated {
 		if item.Quantity > int32(s.cfg.BookingMaxTicketsPerOrder) {
 			return nil, nil, fmt.Errorf("exceeds max tickets per order")
 		}
@@ -106,23 +173,25 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 		if tt.EventID != in.EventID {
 			return nil, nil, fmt.Errorf("ticket type does not belong to event")
 		}
+		if item.Quantity > tt.MaxPerOrder {
+			return nil, nil, fmt.Errorf("exceeds max tickets per order for %s", tt.Name)
+		}
 
 		now := time.Now()
 		if now.Before(tt.SalesStartAt) || now.After(tt.SalesEndAt) {
 			return nil, nil, fmt.Errorf("ticket sales not open")
 		}
 
-		updated, err := qtx.IncrementHeldCount(ctx, db.IncrementHeldCountParams{
-			ID:  item.TicketTypeID,
+		if _, err := qtx.IncrementHeldCount(ctx, db.IncrementHeldCountParams{
+			ID:        item.TicketTypeID,
 			HeldCount: item.Quantity,
-		})
-		if err != nil {
+		}); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, nil, ErrInventoryExhausted
 			}
 			return nil, nil, err
 		}
-		_ = updated
+		typePrices[item.TicketTypeID] = tt
 		total += int64(tt.Price) * int64(item.Quantity)
 	}
 
@@ -139,8 +208,8 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 		return nil, nil, err
 	}
 
-	for _, item := range in.Items {
-		tt, _ := qtx.GetTicketTypeByID(ctx, item.TicketTypeID)
+	for _, item := range aggregated {
+		tt := typePrices[item.TicketTypeID]
 		_, err = qtx.CreateBookingItem(ctx, db.CreateBookingItemParams{
 			BookingID:    booking.ID,
 			TicketTypeID: item.TicketTypeID,
@@ -158,6 +227,32 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 
 	items, err := s.queries.ListBookingItems(ctx, booking.ID)
 	return &booking, items, err
+}
+
+func (s *Service) InvalidateEventCache(ctx context.Context, eventID uuid.UUID) {
+	s.invalidateEventCache(ctx, eventID)
+}
+
+func (s *Service) AfterConfirm(ctx context.Context, bookingID, eventID uuid.UUID) {
+	if s.holdStore != nil {
+		_ = s.holdStore.ReleaseHold(ctx, bookingID)
+	}
+	s.invalidateEventCache(ctx, eventID)
+}
+
+func (s *Service) invalidateEventCache(ctx context.Context, eventID uuid.UUID) {
+	if s.cache == nil {
+		return
+	}
+	event, err := s.queries.GetEventByID(ctx, eventID)
+	if err != nil {
+		return
+	}
+	_ = s.cache.Delete(ctx,
+		redisutil.CacheKey("avail", event.Slug),
+		redisutil.CacheKey("event", event.Slug),
+	)
+	_ = s.cache.DeleteByPrefix(ctx, redisutil.CacheKey("events", "list"))
 }
 
 func (s *Service) GetByID(ctx context.Context, userID, bookingID uuid.UUID) (*db.Booking, []db.ListBookingItemsRow, error) {
@@ -227,17 +322,23 @@ func (s *Service) Cancel(ctx context.Context, userID, bookingID uuid.UUID) error
 		}
 	}
 
-	var confirmedAt pgtype.Timestamptz
-	_, err = qtx.UpdateBookingStatus(ctx, db.UpdateBookingStatusParams{
-		ID:          bookingID,
-		Status:      string(db.BookingStatusCancelled),
-		ConfirmedAt: confirmedAt,
-	})
+	_, err = qtx.CancelBookingIfActive(ctx, bookingID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidStatus
+		}
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if s.holdStore != nil {
+		_ = s.holdStore.ReleaseHold(ctx, bookingID)
+	}
+	s.invalidateEventCache(ctx, booking.EventID)
+	return nil
 }
 
 func (s *Service) ConfirmPayment(ctx context.Context, bookingID uuid.UUID) error {
@@ -248,52 +349,87 @@ func (s *Service) ConfirmPayment(ctx context.Context, bookingID uuid.UUID) error
 	defer tx.Rollback(ctx)
 
 	qtx := s.queries.WithTx(tx)
-	booking, err := qtx.GetBookingByID(ctx, bookingID)
+	eventID, err := s.confirmPaymentInTx(ctx, qtx, bookingID)
 	if err != nil {
 		return err
 	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if s.holdStore != nil {
+		_ = s.holdStore.ReleaseHold(ctx, bookingID)
+	}
+	if eventID != uuid.Nil {
+		s.invalidateEventCache(ctx, eventID)
+	}
+	return nil
+}
+
+// ConfirmPaymentInTx confirms a booking inside an existing transaction (used by payment service).
+func (s *Service) ConfirmPaymentInTx(ctx context.Context, qtx *db.Queries, bookingID uuid.UUID) error {
+	_, err := s.confirmPaymentInTx(ctx, qtx, bookingID)
+	return err
+}
+
+func (s *Service) confirmPaymentInTx(ctx context.Context, qtx *db.Queries, bookingID uuid.UUID) (uuid.UUID, error) {
+	booking, err := qtx.GetBookingByIDForUpdate(ctx, bookingID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
 	if booking.Status == string(db.BookingStatusConfirmed) {
-		return tx.Commit(ctx)
+		return uuid.Nil, nil
 	}
 
 	if booking.Status != string(db.BookingStatusHeld) &&
 		booking.Status != string(db.BookingStatusPendingPayment) &&
 		booking.Status != string(db.BookingStatusExpired) {
-		return ErrInvalidStatus
+		return uuid.Nil, ErrInvalidStatus
 	}
+
+	wasExpired := booking.Status == string(db.BookingStatusExpired)
 
 	items, err := qtx.ListBookingItems(ctx, bookingID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	for _, item := range items {
-		if _, err := qtx.ConfirmSoldTickets(ctx, db.ConfirmSoldTicketsParams{
+		if wasExpired {
+			if _, err := qtx.SellTicketsDirect(ctx, item.TicketTypeID, item.Quantity); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return uuid.Nil, ErrInventoryExhausted
+				}
+				return uuid.Nil, err
+			}
+		} else if _, err := qtx.ConfirmSoldTickets(ctx, db.ConfirmSoldTicketsParams{
 			ID:        item.TicketTypeID,
 			SoldCount: item.Quantity,
 		}); err != nil {
-			return err
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, ErrInventoryExhausted
+			}
+			return uuid.Nil, err
 		}
 	}
 
 	now := time.Now()
-	var confirmedAt pgtype.Timestamptz
-	confirmedAt = pgtype.Timestamptz{Time: now, Valid: true}
-	_, err = qtx.UpdateBookingStatus(ctx, db.UpdateBookingStatusParams{
-		ID:          bookingID,
-		Status:      string(db.BookingStatusConfirmed),
-		ConfirmedAt: confirmedAt,
-	})
+	confirmedAt := pgtype.Timestamptz{Time: now, Valid: true}
+	_, err = qtx.ConfirmBookingPayment(ctx, bookingID, confirmedAt)
 	if err != nil {
-		return err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrInvalidStatus
+		}
+		return uuid.Nil, err
 	}
 
 	for _, item := range items {
 		for i := int32(0); i < item.Quantity; i++ {
 			code, err := s.generateTicketCode(bookingID, item.TicketTypeID)
 			if err != nil {
-				return err
+				return uuid.Nil, err
 			}
 			_, err = qtx.CreateTicket(ctx, db.CreateTicketParams{
 				BookingID:    bookingID,
@@ -302,12 +438,12 @@ func (s *Service) ConfirmPayment(ctx context.Context, bookingID uuid.UUID) error
 				Status:       string(db.TicketStatusActive),
 			})
 			if err != nil {
-				return err
+				return uuid.Nil, err
 			}
 		}
 	}
 
-	return tx.Commit(ctx)
+	return booking.EventID, nil
 }
 
 func (s *Service) StartPayment(ctx context.Context, userID, bookingID uuid.UUID) (*db.Booking, error) {
@@ -330,13 +466,12 @@ func (s *Service) StartPayment(ctx context.Context, userID, bookingID uuid.UUID)
 		return nil, fmt.Errorf("hold expired")
 	}
 
-	var confirmedAt pgtype.Timestamptz
-	updated, err := s.queries.UpdateBookingStatus(ctx, db.UpdateBookingStatusParams{
-		ID:          bookingID,
-		Status:      string(db.BookingStatusPendingPayment),
-		ConfirmedAt: confirmedAt,
-	})
+	graceExpiry := time.Now().Add(s.cfg.BookingPaymentGrace)
+	updated, err := s.queries.StartPaymentBooking(ctx, bookingID, graceExpiry)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInvalidStatus
+		}
 		return nil, err
 	}
 	return &updated, nil
@@ -373,17 +508,23 @@ func (s *Service) ReleaseOnPaymentFailure(ctx context.Context, bookingID uuid.UU
 		}
 	}
 
-	var confirmedAt pgtype.Timestamptz
-	_, err = qtx.UpdateBookingStatus(ctx, db.UpdateBookingStatusParams{
-		ID:          bookingID,
-		Status:      string(db.BookingStatusCancelled),
-		ConfirmedAt: confirmedAt,
-	})
+	_, err = qtx.CancelBookingIfActive(ctx, bookingID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if s.holdStore != nil {
+		_ = s.holdStore.ReleaseHold(ctx, bookingID)
+	}
+	s.invalidateEventCache(ctx, booking.EventID)
+	return nil
 }
 
 func (s *Service) ExpireHeldBooking(ctx context.Context, bookingID uuid.UUID) error {
@@ -394,7 +535,7 @@ func (s *Service) ExpireHeldBooking(ctx context.Context, bookingID uuid.UUID) er
 	defer tx.Rollback(ctx)
 
 	qtx := s.queries.WithTx(tx)
-	booking, err := qtx.GetBookingByID(ctx, bookingID)
+	booking, err := qtx.GetBookingByIDForUpdate(ctx, bookingID)
 	if err != nil {
 		return err
 	}
@@ -417,17 +558,23 @@ func (s *Service) ExpireHeldBooking(ctx context.Context, bookingID uuid.UUID) er
 		}
 	}
 
-	var confirmedAt pgtype.Timestamptz
-	_, err = qtx.UpdateBookingStatus(ctx, db.UpdateBookingStatusParams{
-		ID:          bookingID,
-		Status:      string(db.BookingStatusExpired),
-		ConfirmedAt: confirmedAt,
-	})
+	_, err = qtx.ExpireBookingIfActive(ctx, bookingID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if s.holdStore != nil {
+		_ = s.holdStore.ReleaseHold(ctx, bookingID)
+	}
+	s.invalidateEventCache(ctx, booking.EventID)
+	return nil
 }
 
 func (s *Service) generateTicketCode(bookingID, ticketTypeID uuid.UUID) (string, error) {

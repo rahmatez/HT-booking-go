@@ -20,6 +20,7 @@ import (
 	"github.com/rahmatez/high-traffic-booking/backend/internal/payment"
 	midtransclient "github.com/rahmatez/high-traffic-booking/backend/internal/payment/midtrans"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/middleware"
+	redisutil "github.com/rahmatez/high-traffic-booking/backend/internal/platform/redis"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/response"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/ticket"
 )
@@ -37,17 +38,21 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 	queries := db.New(pool)
 	jwtSvc := auth.NewJWTService(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 
-	authSvc := auth.NewService(queries, jwtSvc)
+	cache := redisutil.NewCache(redis)
+	holdStore := redisutil.NewHoldStore(redis)
+	rateLimiter := redisutil.NewRateLimiter(redis)
+
+	authSvc := auth.NewService(pool, queries, jwtSvc)
 	authHandler := auth.NewHandler(authSvc)
 
-	catalogSvc := catalog.NewService(queries)
+	catalogSvc := catalog.NewService(queries, cache, cfg)
 	catalogHandler := catalog.NewHandler(catalogSvc)
 
-	bookingSvc := booking.NewService(pool, queries, cfg)
+	bookingSvc := booking.NewService(pool, queries, cfg, holdStore, cache)
 	bookingHandler := booking.NewHandler(bookingSvc)
 
 	mtClient := midtransclient.NewClient(cfg.MidtransServerKey, cfg.MidtransClientKey, cfg.MidtransIsProduction)
-	paymentSvc := payment.NewService(queries, bookingSvc, mtClient, cfg)
+	paymentSvc := payment.NewService(pool, queries, bookingSvc, mtClient, cfg)
 	paymentHandler := payment.NewHandler(paymentSvc, queries, bookingSvc, cfg)
 	ticketHandler := ticket.NewHandler(queries)
 
@@ -66,8 +71,18 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Route("/auth", func(ar chi.Router) {
-			ar.Post("/register", authHandler.Register)
-			ar.Post("/login", authHandler.Login)
+			ar.With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+				Scope:  "login",
+				Limit:  cfg.RateLimitLoginPerMin,
+				Window: cfg.RateLimitWindow,
+				KeyFn:  middleware.ClientIP,
+			})).Post("/register", authHandler.Register)
+			ar.With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+				Scope:  "login",
+				Limit:  cfg.RateLimitLoginPerMin,
+				Window: cfg.RateLimitWindow,
+				KeyFn:  middleware.ClientIP,
+			})).Post("/login", authHandler.Login)
 			ar.Post("/refresh", authHandler.Refresh)
 			ar.Post("/logout", authHandler.Logout)
 			ar.With(middleware.Auth(jwtSvc)).Get("/me", authHandler.Me)
@@ -82,7 +97,12 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 
 		api.Route("/bookings", func(br chi.Router) {
 			br.Use(middleware.Auth(jwtSvc))
-			br.Post("/hold", bookingHandler.Hold)
+			br.With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+				Scope:  "hold",
+				Limit:  cfg.RateLimitHoldPerMin,
+				Window: cfg.RateLimitWindow,
+				KeyFn:  middleware.AuthUserID,
+			})).Post("/hold", bookingHandler.Hold)
 			br.Get("/", bookingHandler.List)
 			br.Get("/{id}", bookingHandler.Get)
 			br.Post("/{id}/confirm", bookingHandler.Confirm)
@@ -92,7 +112,12 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 
 		api.Route("/payments", func(pr chi.Router) {
 			pr.Post("/webhook/{gateway}", paymentHandler.Webhook)
-			pr.With(middleware.Auth(jwtSvc)).Post("/checkout", paymentHandler.Checkout)
+			pr.With(middleware.Auth(jwtSvc)).With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+				Scope:  "checkout",
+				Limit:  cfg.RateLimitCheckoutPerMin,
+				Window: cfg.RateLimitWindow,
+				KeyFn:  middleware.AuthUserID,
+			})).Post("/checkout", paymentHandler.Checkout)
 			pr.With(middleware.Auth(jwtSvc)).Post("/sync", paymentHandler.Sync)
 			pr.With(middleware.Auth(jwtSvc)).Get("/{id}/status", paymentHandler.GetStatus)
 			pr.With(middleware.Auth(jwtSvc)).Post("/simulate", paymentHandler.SimulatePayment)
@@ -105,7 +130,7 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 
 		api.Route("/admin", func(ar chi.Router) {
 			ar.Use(middleware.Auth(jwtSvc))
-			ar.Use(middleware.RequireRole("admin", "organizer"))
+			ar.Use(middleware.RequireRoleDB(queries, "admin", "organizer"))
 			ar.Get("/dashboard/stats", adminHandler.DashboardStats)
 			ar.Get("/events", adminHandler.ListEvents)
 			ar.Post("/events", adminHandler.CreateEvent)

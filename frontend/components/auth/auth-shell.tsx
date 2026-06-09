@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Container } from "@/components/ui/container";
+import { BRAND_NAME } from "@/lib/brand";
 
 export function AuthShell({
   title,
@@ -19,7 +20,7 @@ export function AuthShell({
         <div className="texture-grain absolute inset-0" />
         <Container className="relative z-10 flex flex-1 flex-col justify-center py-16">
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-orange-300/80">
-            HTB Ticket
+            {BRAND_NAME}
           </p>
           <h2 className="mt-4 max-w-md text-4xl font-bold leading-tight tracking-tight text-white">
             Satu akun untuk semua tiket event favoritmu.

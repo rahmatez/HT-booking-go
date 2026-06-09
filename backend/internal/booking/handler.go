@@ -47,6 +47,8 @@ func (h *Handler) Hold(w http.ResponseWriter, r *http.Request) {
 			response.Conflict(w, "INVENTORY_EXHAUSTED", "tiket sudah habis")
 		case errors.Is(err, ErrHoldLimitReached):
 			response.Conflict(w, "HOLD_LIMIT_REACHED", "terlalu banyak hold aktif")
+		case errors.Is(err, ErrIdempotencyConflict):
+			response.Conflict(w, "IDEMPOTENCY_CONFLICT", "idempotency key sudah dipakai untuk permintaan lain")
 		default:
 			response.BadRequest(w, err.Error())
 		}

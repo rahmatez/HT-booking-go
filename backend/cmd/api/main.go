@@ -53,7 +53,9 @@ func main() {
 	srv := server.New(cfg, log, pool, redis)
 
 	queries := db.New(pool)
-	bookingSvc := booking.NewService(pool, queries, cfg)
+	cache := redisclient.NewCache(redis)
+	holdStore := redisclient.NewHoldStore(redis)
+	bookingSvc := booking.NewService(pool, queries, cfg, holdStore, cache)
 	holdWorker := worker.NewHoldExpiryWorker(queries, bookingSvc, log)
 	go holdWorker.Start(ctx)
 

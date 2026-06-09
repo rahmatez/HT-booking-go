@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
@@ -24,12 +25,13 @@ var (
 )
 
 type Service struct {
+	pool    *pgxpool.Pool
 	queries *db.Queries
 	jwt     *JWTService
 }
 
-func NewService(queries *db.Queries, jwt *JWTService) *Service {
-	return &Service{queries: queries, jwt: jwt}
+func NewService(pool *pgxpool.Pool, queries *db.Queries, jwt *JWTService) *Service {
+	return &Service{pool: pool, queries: queries, jwt: jwt}
 }
 
 type TokenPair struct {
@@ -122,8 +124,26 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, err
 	}
 
-	_ = s.queries.RevokeRefreshToken(ctx, hash)
-	return s.issueTokens(ctx, user)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.queries.WithTx(tx)
+	if err := qtx.RevokeRefreshToken(ctx, hash); err != nil {
+		return nil, err
+	}
+
+	tokens, err := s.issueTokensTx(ctx, qtx, user)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return tokens, nil
 }
 
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
@@ -131,6 +151,10 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 }
 
 func (s *Service) issueTokens(ctx context.Context, user db.User) (*TokenPair, error) {
+	return s.issueTokensTx(ctx, s.queries, user)
+}
+
+func (s *Service) issueTokensTx(ctx context.Context, qtx *db.Queries, user db.User) (*TokenPair, error) {
 	access, err := s.jwt.GenerateAccessToken(user.ID, user.Email, string(user.Role))
 	if err != nil {
 		return nil, err
@@ -141,7 +165,7 @@ func (s *Service) issueTokens(ctx context.Context, user db.User) (*TokenPair, er
 		return nil, err
 	}
 
-	_, err = s.queries.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+	_, err = qtx.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
 		UserID:    user.ID,
 		TokenHash: hashToken(refreshRaw),
 		ExpiresAt: time.Now().Add(s.jwt.RefreshTTL()),

@@ -12,6 +12,9 @@ SELECT * FROM bookings WHERE id = $1 AND user_id = $2;
 -- name: GetBookingByIdempotencyKey :one
 SELECT * FROM bookings WHERE idempotency_key = $1;
 
+-- name: GetBookingByIdempotencyKeyForUser :one
+SELECT * FROM bookings WHERE idempotency_key = $1 AND user_id = $2;
+
 -- name: ListBookingsByUser :many
 SELECT b.*, e.title AS event_title, e.slug AS event_slug, e.starts_at AS event_starts_at
 FROM bookings b
@@ -31,6 +34,27 @@ WHERE user_id = $1 AND event_id = $2 AND status IN ('held', 'pending_payment');
 -- name: UpdateBookingStatus :one
 UPDATE bookings SET status = $2, confirmed_at = $3
 WHERE id = $1
+RETURNING *;
+
+-- name: StartPaymentBooking :one
+UPDATE bookings
+SET status = 'pending_payment', hold_expires_at = $2
+WHERE id = $1 AND status = 'held' AND hold_expires_at > NOW()
+RETURNING *;
+
+-- name: ConfirmBookingPayment :one
+UPDATE bookings SET status = 'confirmed', confirmed_at = $2
+WHERE id = $1 AND status IN ('held', 'pending_payment', 'expired')
+RETURNING *;
+
+-- name: CancelBookingIfActive :one
+UPDATE bookings SET status = 'cancelled'
+WHERE id = $1 AND status IN ('held', 'pending_payment')
+RETURNING *;
+
+-- name: ExpireBookingIfActive :one
+UPDATE bookings SET status = 'expired'
+WHERE id = $1 AND status IN ('held', 'pending_payment')
 RETURNING *;
 
 -- name: ListExpiredHeldBookings :many

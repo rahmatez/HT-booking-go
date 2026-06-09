@@ -31,7 +31,10 @@ export function loadMidtransSnap(): Promise<void> {
         : "https://app.sandbox.midtrans.com/snap/snap.js";
       script.setAttribute("data-client-key", CLIENT_KEY);
       script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Gagal memuat Midtrans Snap"));
+      script.onerror = () => {
+        scriptPromise = null;
+        reject(new Error("Gagal memuat Midtrans Snap"));
+      };
       document.body.appendChild(script);
     });
   }

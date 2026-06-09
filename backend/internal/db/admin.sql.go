@@ -19,8 +19,8 @@ SELECT
     (SELECT COUNT(*) FROM events WHERE status = 'published') AS published_events,
     (SELECT COUNT(*) FROM bookings) AS total_bookings,
     (SELECT COUNT(*) FROM bookings WHERE status = 'confirmed') AS confirmed_bookings,
-    (SELECT COALESCE(SUM(total_amount), 0) FROM bookings WHERE status = 'confirmed') AS total_revenue,
-    (SELECT COALESCE(SUM(sold_count), 0) FROM ticket_types) AS tickets_sold
+    (SELECT COALESCE(SUM(total_amount), 0)::bigint FROM bookings WHERE status = 'confirmed') AS total_revenue,
+    (SELECT COALESCE(SUM(sold_count), 0)::bigint FROM ticket_types) AS tickets_sold
 `
 
 type AdminDashboardStatsRow struct {
@@ -28,8 +28,8 @@ type AdminDashboardStatsRow struct {
 	PublishedEvents   int64       `json:"published_events"`
 	TotalBookings     int64       `json:"total_bookings"`
 	ConfirmedBookings int64       `json:"confirmed_bookings"`
-	TotalRevenue      interface{} `json:"total_revenue"`
-	TicketsSold       interface{} `json:"tickets_sold"`
+	TotalRevenue      int64 `json:"total_revenue"`
+	TicketsSold       int64 `json:"tickets_sold"`
 }
 
 func (q *Queries) AdminDashboardStats(ctx context.Context) (AdminDashboardStatsRow, error) {

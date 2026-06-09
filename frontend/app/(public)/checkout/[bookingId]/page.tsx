@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { HoldCountdown } from "@/components/hold-countdown";
 import { api, ApiClientError, Booking, formatIDR } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { useAuthHydrated } from "@/lib/use-auth-hydrated";
 import { isMidtransConfigured, loadMidtransSnap, openMidtransSnap } from "@/lib/midtrans";
 import { Container } from "@/components/ui/container";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+
+const PAYABLE_STATUSES = new Set(["held", "pending_payment"]);
 
 async function waitForConfirmation(token: string, bookingId: string, maxAttempts = 15) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -25,27 +28,46 @@ async function waitForConfirmation(token: string, bookingId: string, maxAttempts
 export default function CheckoutPage() {
   const params = useParams<{ bookingId: string }>();
   const router = useRouter();
+  const hydrated = useAuthHydrated();
   const { accessToken, isAuthenticated } = useAuthStore();
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
+  const [holdExpired, setHoldExpired] = useState(false);
   const [error, setError] = useState("");
   const midtransReady = isMidtransConfigured();
 
+  const handleHoldExpired = useCallback(() => {
+    setHoldExpired(true);
+    setError("Waktu habis. Silakan pesan ulang tiketmu.");
+  }, []);
+
   useEffect(() => {
+    if (!hydrated) return;
     if (!isAuthenticated() || !accessToken) {
       router.push("/auth/login?redirect=/checkout/" + params.bookingId);
       return;
     }
     api
       .getBooking(accessToken, params.bookingId)
-      .then(setBooking)
+      .then((b) => {
+        setBooking(b);
+        if (!PAYABLE_STATUSES.has(b.status)) {
+          setError("Pemesanan tidak dapat dibayar pada status ini.");
+        }
+      })
       .catch(() => setError("Pemesanan tidak ditemukan"))
       .finally(() => setLoading(false));
-  }, [accessToken, isAuthenticated, params.bookingId, router]);
+  }, [hydrated, accessToken, isAuthenticated, params.bookingId, router]);
+
+  const canPay =
+    booking &&
+    PAYABLE_STATUSES.has(booking.status) &&
+    !holdExpired &&
+    !paying;
 
   const handlePay = async () => {
-    if (!accessToken || !booking) return;
+    if (!accessToken || !booking || !canPay) return;
     setPaying(true);
     setError("");
 
@@ -66,9 +88,14 @@ export default function CheckoutPage() {
             }
           },
           onPending: async () => {
-            setError("Pembayaran menunggu konfirmasi. Kami akan memperbarui status otomatis.");
-            await waitForConfirmation(accessToken, booking.id);
-            router.push(`/bookings/${booking.id}`);
+            setPaying(true);
+            const ok = await waitForConfirmation(accessToken, booking.id);
+            if (ok) {
+              router.push(`/bookings/${booking.id}`);
+            } else {
+              setError("Pembayaran menunggu konfirmasi. Cek status di halaman tiket kamu.");
+              setPaying(false);
+            }
           },
           onError: () => {
             setError("Pembayaran gagal atau dibatalkan.");
@@ -81,7 +108,6 @@ export default function CheckoutPage() {
         return;
       }
 
-      // Fallback dev tanpa Midtrans keys
       await api.confirmBooking(accessToken, booking.id);
       await api.simulatePayment(accessToken, booking.id);
       router.push(`/bookings/${booking.id}`);
@@ -97,7 +123,7 @@ export default function CheckoutPage() {
     }
   };
 
-  if (loading) {
+  if (!hydrated || loading) {
     return (
       <div className="flex justify-center py-24">
         <Spinner className="h-8 w-8" />
@@ -123,10 +149,7 @@ export default function CheckoutPage() {
         <h1 className="text-3xl font-bold tracking-tight text-stone-900">Checkout</h1>
 
         <div className="mt-8">
-          <HoldCountdown
-            expiresAt={booking.hold_expires_at}
-            onExpired={() => setError("Waktu habis. Silakan pesan ulang tiketmu.")}
-          />
+          <HoldCountdown expiresAt={booking.hold_expires_at} onExpired={handleHoldExpired} />
         </div>
 
         <div className="mt-6 rounded-2xl border border-(--border) bg-white p-6 shadow-(--shadow-md)">
@@ -160,7 +183,7 @@ export default function CheckoutPage() {
 
         <Button
           onClick={handlePay}
-          disabled={paying || booking.status === "expired"}
+          disabled={!canPay}
           fullWidth
           size="lg"
           className="mt-6"

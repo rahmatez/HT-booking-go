@@ -38,3 +38,11 @@ SET sold_count = sold_count + $2,
     updated_at = NOW()
 WHERE id = $1 AND held_count >= $2
 RETURNING *;
+
+-- name: SellTicketsDirect :one
+UPDATE ticket_types
+SET sold_count = sold_count + $2,
+    version = version + 1,
+    updated_at = NOW()
+WHERE id = $1 AND (total_quota - sold_count - held_count) >= $2
+RETURNING *;

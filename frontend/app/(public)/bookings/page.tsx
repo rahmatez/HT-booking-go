@@ -4,35 +4,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, BookingSummary, formatDate, formatIDR } from "@/lib/api";
+import { bookingStatusLabel, bookingStatusTone } from "@/lib/booking-utils";
 import { useAuthStore } from "@/lib/auth-store";
+import { useAuthHydrated } from "@/lib/use-auth-hydrated";
 import { Container } from "@/components/ui/container";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 
-const statusTone: Record<string, "success" | "warning" | "danger" | "neutral" | "default"> = {
-  confirmed: "success",
-  held: "warning",
-  pending_payment: "warning",
-  cancelled: "neutral",
-  expired: "danger",
-};
-
-const statusLabel: Record<string, string> = {
-  confirmed: "Lunas",
-  held: "Ditahan",
-  pending_payment: "Menunggu bayar",
-  cancelled: "Dibatalkan",
-  expired: "Kedaluwarsa",
-};
-
 export default function BookingsPage() {
   const router = useRouter();
+  const hydrated = useAuthHydrated();
   const { accessToken, isAuthenticated } = useAuthStore();
   const [bookings, setBookings] = useState<BookingSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!hydrated) return;
     if (!isAuthenticated() || !accessToken) {
       router.push("/auth/login?redirect=/bookings");
       return;
@@ -40,8 +29,9 @@ export default function BookingsPage() {
     api
       .listBookings(accessToken)
       .then(setBookings)
+      .catch(() => setError("Gagal memuat daftar tiket"))
       .finally(() => setLoading(false));
-  }, [accessToken, isAuthenticated, router]);
+  }, [hydrated, accessToken, isAuthenticated, router]);
 
   return (
     <div className="py-10 sm:py-14">
@@ -49,8 +39,14 @@ export default function BookingsPage() {
         <h1 className="text-3xl font-bold tracking-tight text-stone-900">Tiket Saya</h1>
         <p className="mt-2 text-stone-500">Semua pembelian dan e-ticket kamu ada di sini.</p>
 
+        {error && (
+          <div className="mt-6 rounded-xl bg-(--danger-soft) px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
         <div className="mt-10">
-          {loading ? (
+          {!hydrated || loading ? (
             <div className="flex justify-center py-20">
               <Spinner className="h-8 w-8" />
             </div>
@@ -78,8 +74,8 @@ export default function BookingsPage() {
                         <p className="mt-1 text-sm text-stone-500">{formatDate(b.event_starts_at)}</p>
                       )}
                     </div>
-                    <Badge tone={statusTone[b.status] || "neutral"}>
-                      {statusLabel[b.status] || b.status}
+                    <Badge tone={bookingStatusTone[b.status] || "neutral"}>
+                      {bookingStatusLabel[b.status] || b.status}
                     </Badge>
                   </div>
                   <div className="mt-4 flex items-center justify-between border-t border-(--border) pt-4">

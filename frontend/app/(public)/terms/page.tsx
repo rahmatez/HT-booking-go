@@ -7,7 +7,7 @@ export default function TermsPage() {
         <p className="text-xs font-bold uppercase tracking-widest text-(--accent)">Legal</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight text-stone-900">Syarat & Ketentuan</h1>
         <p className="mt-4 leading-relaxed text-stone-600">
-          Dengan menggunakan platform HTB Ticket, Anda setuju untuk mematuhi syarat dan ketentuan
+          Dengan menggunakan platform Eventra, Anda setuju untuk mematuhi syarat dan ketentuan
           berikut. Tiket yang dibeli bersifat final kecuali event dibatalkan oleh penyelenggara.
         </p>
 

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/booking"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/config"
@@ -19,6 +20,7 @@ import (
 var (
 	ErrNotConfigured = errors.New("payment gateway not configured")
 	ErrNotFound      = errors.New("payment not found")
+	ErrAmountMismatch = errors.New("payment amount mismatch")
 )
 
 type CheckoutResult struct {
@@ -32,19 +34,21 @@ type CheckoutResult struct {
 }
 
 type Service struct {
-	queries      *db.Queries
-	booking      *booking.Service
-	midtrans     *midtrans.Client
-	cfg          *config.Config
-	frontendURL  string
+	pool        *pgxpool.Pool
+	queries     *db.Queries
+	booking     *booking.Service
+	midtrans    *midtrans.Client
+	cfg         *config.Config
+	frontendURL string
 }
 
-func NewService(queries *db.Queries, bookingSvc *booking.Service, mt *midtrans.Client, cfg *config.Config) *Service {
+func NewService(pool *pgxpool.Pool, queries *db.Queries, bookingSvc *booking.Service, mt *midtrans.Client, cfg *config.Config) *Service {
 	frontendURL := "http://localhost:3000"
 	if origins := cfg.CORSAllowedOrigins; len(origins) > 0 && origins[0] != "" {
 		frontendURL = origins[0]
 	}
 	return &Service{
+		pool:        pool,
 		queries:     queries,
 		booking:     bookingSvc,
 		midtrans:    mt,
@@ -122,7 +126,7 @@ func (s *Service) Checkout(ctx context.Context, userID, bookingID uuid.UUID) (*C
 	}
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		payment, err = s.queries.CreatePayment(ctx, db.CreatePaymentParams{
+		_, err = s.queries.CreatePayment(ctx, db.CreatePaymentParams{
 			BookingID:      bookingID,
 			Gateway:        "midtrans",
 			GatewayRef:     pgtype.Text{String: snap.Token, Valid: true},
@@ -134,7 +138,7 @@ func (s *Service) Checkout(ctx context.Context, userID, bookingID uuid.UUID) (*C
 			return nil, err
 		}
 	} else {
-		payment, err = s.queries.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
+		_, err = s.queries.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
 			ID:         payment.ID,
 			Status:     string(db.PaymentStatusPending),
 			PaidAt:     pgtype.Timestamptz{},
@@ -144,7 +148,6 @@ func (s *Service) Checkout(ctx context.Context, userID, bookingID uuid.UUID) (*C
 			return nil, err
 		}
 	}
-	_ = payment
 
 	return &CheckoutResult{
 		SnapToken:    snap.Token,
@@ -182,10 +185,9 @@ func (s *Service) HandleMidtransNotification(ctx context.Context, notif midtrans
 		return fmt.Errorf("invalid order id")
 	}
 
-	return s.applyTransactionStatus(ctx, bookingID, status.TransactionStatus, status.TransactionID)
+	return s.applyTransactionStatus(ctx, bookingID, *status)
 }
 
-// SyncBookingPayment polls Midtrans and applies the latest transaction status (useful when webhook cannot reach localhost).
 func (s *Service) SyncBookingPayment(ctx context.Context, userID, bookingID uuid.UUID) (string, error) {
 	if !s.midtrans.IsConfigured() {
 		return "", ErrNotConfigured
@@ -200,7 +202,7 @@ func (s *Service) SyncBookingPayment(ctx context.Context, userID, bookingID uuid
 		return "", err
 	}
 
-	if err := s.applyTransactionStatus(ctx, bookingID, status.TransactionStatus, status.TransactionID); err != nil {
+	if err := s.applyTransactionStatus(ctx, bookingID, *status); err != nil {
 		return "", err
 	}
 
@@ -211,36 +213,62 @@ func (s *Service) SyncBookingPayment(ctx context.Context, userID, bookingID uuid
 	return b.Status, nil
 }
 
-func (s *Service) applyTransactionStatus(ctx context.Context, bookingID uuid.UUID, txStatus, transactionID string) error {
+func (s *Service) applyTransactionStatus(ctx context.Context, bookingID uuid.UUID, status midtrans.TransactionStatus) error {
 	paymentRow, err := s.queries.GetPaymentByOrderID(ctx, bookingID.String())
 	hasPayment := err == nil
 
 	switch {
-	case midtrans.IsPaymentSuccess(txStatus):
-		if err := s.booking.ConfirmPayment(ctx, bookingID); err != nil {
+	case midtrans.IsPaymentSuccess(status.TransactionStatus, status.FraudStatus):
+		amount, err := parseMidtransAmount(status.GrossAmount)
+		if err != nil {
 			return err
 		}
+
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+
+		qtx := s.queries.WithTx(tx)
+		bookingRow, err := qtx.GetBookingByID(ctx, bookingID)
+		if err != nil {
+			return err
+		}
+		if amount != bookingRow.TotalAmount {
+			return ErrAmountMismatch
+		}
+
+		if err := s.booking.ConfirmPaymentInTx(ctx, qtx, bookingID); err != nil {
+			return err
+		}
+
 		if hasPayment {
 			now := time.Now()
-			_, err = s.queries.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
+			if _, err = qtx.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
 				ID:         paymentRow.ID,
 				Status:     string(db.PaymentStatusSuccess),
 				PaidAt:     pgtype.Timestamptz{Time: now, Valid: true},
-				GatewayRef: pgtype.Text{String: transactionID, Valid: transactionID != ""},
-			})
+				GatewayRef: pgtype.Text{String: status.TransactionID, Valid: status.TransactionID != ""},
+			}); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
+		s.booking.AfterConfirm(ctx, bookingID, bookingRow.EventID)
 		return nil
 
-	case midtrans.IsPaymentFailed(txStatus):
+	case midtrans.IsPaymentFailed(status.TransactionStatus):
 		if hasPayment {
-			_, err = s.queries.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
+			if _, err = s.queries.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
 				ID:         paymentRow.ID,
 				Status:     string(db.PaymentStatusFailed),
 				PaidAt:     pgtype.Timestamptz{},
-				GatewayRef: pgtype.Text{String: transactionID, Valid: transactionID != ""},
-			})
-			if err != nil {
+				GatewayRef: pgtype.Text{String: status.TransactionID, Valid: status.TransactionID != ""},
+			}); err != nil {
 				return err
 			}
 		}

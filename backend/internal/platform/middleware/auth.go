@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/auth"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/authctx"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/response"
 )
@@ -51,6 +52,42 @@ func OptionalAuth(jwtSvc *auth.JWTService) func(http.Handler) http.Handler {
 				}
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func RequireRoleDB(queries *db.Queries, roles ...string) func(http.Handler) http.Handler {
+	roleSet := make(map[string]struct{}, len(roles))
+	for _, r := range roles {
+		roleSet[r] = struct{}{}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := authctx.GetUser(r.Context())
+			if !ok {
+				response.Unauthorized(w, "authentication required")
+				return
+			}
+
+			dbUser, err := queries.GetUserByID(r.Context(), user.ID)
+			if err != nil {
+				response.Unauthorized(w, "authentication required")
+				return
+			}
+
+			role := string(dbUser.Role)
+			if _, allowed := roleSet[role]; !allowed {
+				response.Forbidden(w, "insufficient permissions")
+				return
+			}
+
+			ctx := authctx.WithUser(r.Context(), authctx.User{
+				ID:    user.ID,
+				Email: user.Email,
+				Role:  role,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

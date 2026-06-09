@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { EventForm } from "@/components/admin/event-form";
+import { PageHeader } from "@/components/admin/page-header";
 import { Spinner } from "@/components/ui/spinner";
 import { api, AdminEventDetail, AdminTicketType } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
@@ -14,6 +15,7 @@ export default function AdminEditEventPage() {
   const [event, setEvent] = useState<AdminEventDetail | null>(null);
   const [ticketTypes, setTicketTypes] = useState<AdminTicketType[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     if (!accessToken || !id) return;
@@ -23,6 +25,7 @@ export default function AdminEditEventPage() {
         setEvent(res.event);
         setTicketTypes(res.ticket_types);
       })
+      .catch(() => setLoadError("Gagal memuat event"))
       .finally(() => setLoading(false));
   }, [accessToken, id]);
 
@@ -37,31 +40,37 @@ export default function AdminEditEventPage() {
     );
   }
 
-  if (!event) {
+  if (loadError || !event) {
     return (
       <p className="rounded-xl border border-red-200 bg-(--danger-soft) px-4 py-3 text-sm text-red-700">
-        Event tidak ditemukan
+        {loadError || "Event tidak ditemukan"}
       </p>
     );
   }
 
   return (
     <div>
-      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-        <header>
-          <h1 className="text-2xl font-bold tracking-tight text-stone-900">Edit Event</h1>
-          <p className="mt-1 text-sm text-stone-500">{event.title}</p>
-        </header>
-        {event.slug && (
-          <Link
-            href={`/events/${event.slug}`}
-            target="_blank"
-            className="text-sm font-semibold text-(--accent) hover:underline"
-          >
-            Lihat di situs →
-          </Link>
-        )}
-      </div>
+      <Link
+        href="/admin/events"
+        className="text-sm font-medium text-stone-500 hover:text-(--accent)"
+      >
+        ← Kembali ke daftar event
+      </Link>
+      <PageHeader
+        title="Edit Event"
+        description={event.title}
+        action={
+          event.slug ? (
+            <Link
+              href={`/events/${event.slug}`}
+              target="_blank"
+              className="text-sm font-semibold text-(--accent) hover:underline"
+            >
+              Lihat di situs →
+            </Link>
+          ) : undefined
+        }
+      />
       <EventForm
         token={accessToken}
         eventId={id}

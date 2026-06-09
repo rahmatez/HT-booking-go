@@ -15,9 +15,11 @@ func VerifyNotificationSignature(orderID, statusCode, grossAmount, serverKey, si
 	return expected == signatureKey
 }
 
-func IsPaymentSuccess(status string) bool {
-	switch status {
-	case "capture", "settlement":
+func IsPaymentSuccess(transactionStatus, fraudStatus string) bool {
+	switch transactionStatus {
+	case "capture":
+		return fraudStatus == "" || fraudStatus == "accept"
+	case "settlement":
 		return true
 	default:
 		return false

@@ -41,6 +41,15 @@ type Config struct {
 	EmailFrom     string
 
 	CORSAllowedOrigins []string
+
+	RedisCacheEventsTTL time.Duration
+	RedisCacheAvailTTL  time.Duration
+	RedisCacheEventTTL  time.Duration
+
+	RateLimitLoginPerMin    int
+	RateLimitHoldPerMin     int
+	RateLimitCheckoutPerMin int
+	RateLimitWindow         time.Duration
 }
 
 func Load() (*Config, error) {
@@ -93,6 +102,26 @@ func Load() (*Config, error) {
 
 	origins := getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 	cfg.CORSAllowedOrigins = strings.Split(origins, ",")
+
+	cfg.RateLimitLoginPerMin = getEnvInt("RATE_LIMIT_LOGIN_PER_MIN", 10)
+	cfg.RateLimitHoldPerMin = getEnvInt("RATE_LIMIT_HOLD_PER_MIN", 30)
+	cfg.RateLimitCheckoutPerMin = getEnvInt("RATE_LIMIT_CHECKOUT_PER_MIN", 15)
+	cfg.RateLimitWindow, err = time.ParseDuration(getEnv("RATE_LIMIT_WINDOW", "1m"))
+	if err != nil {
+		return nil, fmt.Errorf("RATE_LIMIT_WINDOW: %w", err)
+	}
+	cfg.RedisCacheEventsTTL, err = time.ParseDuration(getEnv("REDIS_CACHE_EVENTS_TTL", "60s"))
+	if err != nil {
+		return nil, fmt.Errorf("REDIS_CACHE_EVENTS_TTL: %w", err)
+	}
+	cfg.RedisCacheAvailTTL, err = time.ParseDuration(getEnv("REDIS_CACHE_AVAIL_TTL", "5s"))
+	if err != nil {
+		return nil, fmt.Errorf("REDIS_CACHE_AVAIL_TTL: %w", err)
+	}
+	cfg.RedisCacheEventTTL, err = time.ParseDuration(getEnv("REDIS_CACHE_EVENT_TTL", "60s"))
+	if err != nil {
+		return nil, fmt.Errorf("REDIS_CACHE_EVENT_TTL: %w", err)
+	}
 
 	return cfg, nil
 }

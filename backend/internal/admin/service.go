@@ -112,16 +112,3 @@ func (s *Service) ListVenues(ctx context.Context) ([]db.Venue, error) {
 func (s *Service) Catalog() *catalog.Service {
 	return s.catalogSvc
 }
-
-func toInt64(v interface{}) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int32:
-		return int64(n)
-	case float64:
-		return int64(n)
-	default:
-		return 0
-	}
-}

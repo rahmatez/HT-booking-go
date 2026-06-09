@@ -32,8 +32,8 @@ func (h *Handler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 		"published_events":   stats.PublishedEvents,
 		"total_bookings":     stats.TotalBookings,
 		"confirmed_bookings": stats.ConfirmedBookings,
-		"total_revenue":      toInt64(stats.TotalRevenue),
-		"tickets_sold":       toInt64(stats.TicketsSold),
+		"total_revenue":      stats.TotalRevenue,
+		"tickets_sold":       stats.TicketsSold,
 	})
 }
 
@@ -196,6 +196,12 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	status := q.Get("status")
 	eventID := q.Get("event_id")
+	if eventID != "" {
+		if _, err := uuid.Parse(eventID); err != nil {
+			response.BadRequest(w, "invalid event_id")
+			return
+		}
+	}
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("per_page"))
 

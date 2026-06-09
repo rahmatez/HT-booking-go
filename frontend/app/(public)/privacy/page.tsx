@@ -7,7 +7,7 @@ export default function PrivacyPage() {
         <p className="text-xs font-bold uppercase tracking-widest text-(--accent)">Legal</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight text-stone-900">Kebijakan Privasi</h1>
         <p className="mt-4 leading-relaxed text-stone-600">
-          HTB Ticket menghormati privasi pengguna sesuai peraturan perlindungan data yang berlaku
+          Eventra menghormati privasi pengguna sesuai peraturan perlindungan data yang berlaku
           di Indonesia (UU PDP).
         </p>
 

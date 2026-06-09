@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useState, Suspense } from "react";
 import { api, ApiClientError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { safeRedirect } from "@/lib/safe-redirect";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,7 @@ function LoginForm() {
         password: String(form.get("password")),
       });
       setAuth(res.user, res.tokens);
-      router.push(searchParams.get("redirect") || "/events");
+      router.push(safeRedirect(searchParams.get("redirect")));
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Email atau password salah");
     } finally {
@@ -55,7 +56,9 @@ function LoginForm() {
           required
           autoComplete="email"
           placeholder="nama@email.com"
-          defaultValue="user@booking.local"
+          defaultValue={
+            process.env.NODE_ENV === "development" ? "user@booking.local" : undefined
+          }
         />
         <Input
           label="Password"
@@ -63,7 +66,7 @@ function LoginForm() {
           type="password"
           required
           autoComplete="current-password"
-          defaultValue="user12345"
+          defaultValue={process.env.NODE_ENV === "development" ? "user12345" : undefined}
         />
         {error && (
           <div className="rounded-xl bg-(--danger-soft) px-4 py-3 text-sm text-red-700">

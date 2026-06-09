@@ -16,6 +16,9 @@ SELECT * FROM events WHERE id = $1;
 -- name: GetEventBySlug :one
 SELECT * FROM events WHERE slug = $1;
 
+-- name: GetPublishedEventBySlug :one
+SELECT * FROM events WHERE slug = $1 AND status = 'published';
+
 -- name: ListPublishedEvents :many
 SELECT e.*, v.name AS venue_name, v.city AS venue_city
 FROM events e

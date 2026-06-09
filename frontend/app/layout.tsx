@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
+import { AuthProvider } from "@/components/auth-provider";
+import { BRAND_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -9,8 +11,9 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "HTB Ticket — Beli Tiket Event dengan Mudah",
-  description: "Platform booking dan ticketing event terpercaya. Aman, cepat, dan ramah antrean.",
+  title: `${BRAND_NAME} — ${BRAND_TAGLINE}`,
+  description:
+    "Platform booking dan ticketing event terpercaya. Aman, cepat, dan ramah antrean.",
 };
 
 export default function RootLayout({
@@ -20,7 +23,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id" className={`${jakarta.variable} h-full`}>
-      <body className="min-h-full antialiased">{children}</body>
+      <body className="min-h-full antialiased">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

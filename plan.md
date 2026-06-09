@@ -1,6 +1,6 @@
-# High-Traffic Booking & Ticketing Platform
+# Eventra — High-Traffic Booking & Ticketing Platform
 
-> Rancangan dan persiapan awal untuk platform booking & ticketing skala besar.  
+> Rancangan arsitektur **Eventra** — platform booking & ticketing skala besar.  
 > Stack: **Golang** (backend) · **PostgreSQL** (database) · **Next.js + Tailwind** (frontend)
 
 ## Daftar Isi

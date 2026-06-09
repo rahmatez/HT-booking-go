@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { EventForm } from "@/components/admin/event-form";
+import { PageHeader } from "@/components/admin/page-header";
 import { useAuthStore } from "@/lib/auth-store";
 
 export default function AdminNewEventPage() {
@@ -12,10 +14,16 @@ export default function AdminNewEventPage() {
 
   return (
     <div>
-      <header className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight text-stone-900">Buat Event Baru</h1>
-        <p className="mt-1 text-sm text-stone-500">Isi detail event, lalu tambahkan tipe tiket</p>
-      </header>
+      <Link
+        href="/admin/events"
+        className="text-sm font-medium text-stone-500 hover:text-(--accent)"
+      >
+        ← Kembali ke daftar event
+      </Link>
+      <PageHeader
+        title="Buat Event Baru"
+        description="Isi detail event, lalu tambahkan tipe tiket"
+      />
       <EventForm
         token={accessToken}
         onSaved={(id) => router.push(`/admin/events/${id}/edit`)}

@@ -1,3 +1,5 @@
+import { getValidAccessToken, refreshAccessToken } from "./auth-client";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api/v1";
 
 export type ApiError = {
@@ -37,7 +39,16 @@ async function request<T>(
     },
   });
 
-  const body = await res.json();
+  let body: ApiSuccess<T> | ApiError;
+  try {
+    body = await res.json();
+  } catch {
+    throw new ApiClientError(
+      res.status,
+      "INVALID_RESPONSE",
+      res.ok ? "Invalid response from server" : "Request failed"
+    );
+  }
   if (!res.ok || body.success === false) {
     const err = body as ApiError;
     throw new ApiClientError(
@@ -47,6 +58,69 @@ async function request<T>(
     );
   }
   return (body as ApiSuccess<T>).data;
+}
+
+type AuthRequestOptions = RequestInit & {
+  token: string;
+  idempotencyKey?: string;
+};
+
+async function authenticatedRequest<T>(path: string, options: AuthRequestOptions): Promise<T> {
+  const token = await getValidAccessToken(options.token);
+  if (!token) {
+    throw new ApiClientError(401, "UNAUTHORIZED", "Authentication required");
+  }
+
+  try {
+    return await request<T>(path, { ...options, token });
+  } catch (err) {
+    if (err instanceof ApiClientError && err.status === 401) {
+      const newToken = await refreshAccessToken();
+      if (!newToken) throw err;
+      return await request<T>(path, { ...options, token: newToken });
+    }
+    throw err;
+  }
+}
+
+async function authenticatedFetch(
+  path: string,
+  token: string,
+  init?: RequestInit
+): Promise<Response> {
+  const validToken = await getValidAccessToken(token);
+  if (!validToken) {
+    throw new ApiClientError(401, "UNAUTHORIZED", "Authentication required");
+  }
+
+  let res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers || {}),
+      Authorization: `Bearer ${validToken}`,
+    },
+  });
+
+  if (res.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (!newToken) {
+      const body = await res.json().catch(() => ({}));
+      throw new ApiClientError(
+        401,
+        body.error?.code || "UNAUTHORIZED",
+        body.error?.message || "Authentication required"
+      );
+    }
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${newToken}`,
+      },
+    });
+  }
+
+  return res;
 }
 
 export const api = {
@@ -62,7 +136,19 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  me: (token: string) => request<User>("/auth/me", { token }),
+  refresh: (refreshToken: string) =>
+    request<Tokens>("/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    }),
+
+  logout: (refreshToken: string) =>
+    request<{ message: string }>("/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    }),
+
+  me: (token: string) => authenticatedRequest<User>("/auth/me", { token }),
 
   listEvents: (params?: { q?: string; page?: number }) => {
     const qs = new URLSearchParams();
@@ -87,7 +173,7 @@ export const api = {
     idempotencyKey: string,
     data: { event_id: string; items: { ticket_type_id: string; quantity: number }[] }
   ) =>
-    request<Booking>("/bookings/hold", {
+    authenticatedRequest<Booking>("/bookings/hold", {
       method: "POST",
       token,
       idempotencyKey,
@@ -95,46 +181,50 @@ export const api = {
     }),
 
   getBooking: (token: string, id: string) =>
-    request<Booking>(`/bookings/${id}`, { token }),
+    authenticatedRequest<Booking>(`/bookings/${id}`, { token }),
 
-  listBookings: (token: string) => request<BookingSummary[]>("/bookings", { token }),
+  listBookings: (token: string) =>
+    authenticatedRequest<BookingSummary[]>("/bookings", { token }),
 
   confirmBooking: (token: string, id: string) =>
-    request<{ booking_id: string; status: string; total_amount: number }>(
+    authenticatedRequest<{ booking_id: string; status: string; total_amount: number }>(
       `/bookings/${id}/confirm`,
       { method: "POST", token }
     ),
 
   cancelBooking: (token: string, id: string) =>
-    request<{ message: string }>(`/bookings/${id}`, { method: "DELETE", token }),
+    authenticatedRequest<{ message: string }>(`/bookings/${id}`, {
+      method: "DELETE",
+      token,
+    }),
 
   paymentCheckout: (token: string, bookingId: string) =>
-    request<PaymentCheckout>("/payments/checkout", {
+    authenticatedRequest<PaymentCheckout>("/payments/checkout", {
       method: "POST",
       token,
       body: JSON.stringify({ booking_id: bookingId }),
     }),
 
   syncPayment: (token: string, bookingId: string) =>
-    request<{ status: string }>("/payments/sync", {
+    authenticatedRequest<{ status: string }>("/payments/sync", {
       method: "POST",
       token,
       body: JSON.stringify({ booking_id: bookingId }),
     }),
 
   simulatePayment: (token: string, bookingId: string) =>
-    request<{ message: string; booking_id: string }>("/payments/simulate", {
+    authenticatedRequest<{ message: string; booking_id: string }>("/payments/simulate", {
       method: "POST",
       token,
       body: JSON.stringify({ booking_id: bookingId }),
     }),
 
   listTickets: (token: string, bookingId: string) =>
-    request<Ticket[]>(`/bookings/${bookingId}/tickets`, { token }),
+    authenticatedRequest<Ticket[]>(`/bookings/${bookingId}/tickets`, { token }),
 
   // ── Admin ──
   adminStats: (token: string) =>
-    request<AdminStats>("/admin/dashboard/stats", { token }),
+    authenticatedRequest<AdminStats>("/admin/dashboard/stats", { token }),
 
   adminListEvents: (token: string, params?: { status?: string; q?: string; page?: number }) => {
     const qs = new URLSearchParams();
@@ -142,30 +232,32 @@ export const api = {
     if (params?.q) qs.set("q", params.q);
     if (params?.page) qs.set("page", String(params.page));
     const query = qs.toString();
-    return fetch(`${API_URL}/admin/events${query ? `?${query}` : ""}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    }).then(async (res) => {
-      const body = await res.json();
-      if (!body.success) throw new ApiClientError(res.status, body.error?.code, body.error?.message);
-      return body as ApiSuccess<AdminEvent[]>;
-    });
+    return authenticatedFetch(`/admin/events${query ? `?${query}` : ""}`, token).then(
+      async (res) => {
+        const body = await res.json();
+        if (!body.success) {
+          throw new ApiClientError(res.status, body.error?.code, body.error?.message);
+        }
+        return body as ApiSuccess<AdminEvent[]>;
+      }
+    );
   },
 
   adminGetEvent: (token: string, id: string) =>
-    request<{ event: AdminEventDetail; ticket_types: AdminTicketType[] }>(
+    authenticatedRequest<{ event: AdminEventDetail; ticket_types: AdminTicketType[] }>(
       `/admin/events/${id}`,
       { token }
     ),
 
   adminCreateEvent: (token: string, data: AdminEventInput) =>
-    request<AdminEventDetail>("/admin/events", {
+    authenticatedRequest<AdminEventDetail>("/admin/events", {
       method: "POST",
       token,
       body: JSON.stringify(data),
     }),
 
   adminUpdateEvent: (token: string, id: string, data: AdminEventInput) =>
-    request<AdminEventDetail>(`/admin/events/${id}`, {
+    authenticatedRequest<AdminEventDetail>(`/admin/events/${id}`, {
       method: "PUT",
       token,
       body: JSON.stringify(data),
@@ -176,16 +268,17 @@ export const api = {
     eventId: string,
     data: AdminTicketTypeInput
   ) =>
-    request<AdminTicketType>(`/admin/events/${eventId}/ticket-types`, {
+    authenticatedRequest<AdminTicketType>(`/admin/events/${eventId}/ticket-types`, {
       method: "POST",
       token,
       body: JSON.stringify(data),
     }),
 
-  adminListVenues: (token: string) => request<Venue[]>("/admin/venues", { token }),
+  adminListVenues: (token: string) =>
+    authenticatedRequest<Venue[]>("/admin/venues", { token }),
 
   adminCreateVenue: (token: string, data: VenueInput) =>
-    request<Venue>("/admin/venues", {
+    authenticatedRequest<Venue>("/admin/venues", {
       method: "POST",
       token,
       body: JSON.stringify(data),
@@ -200,17 +293,19 @@ export const api = {
     if (params?.event_id) qs.set("event_id", params.event_id);
     if (params?.page) qs.set("page", String(params.page));
     const query = qs.toString();
-    return fetch(`${API_URL}/admin/bookings${query ? `?${query}` : ""}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    }).then(async (res) => {
-      const body = await res.json();
-      if (!body.success) throw new ApiClientError(res.status, body.error?.code, body.error?.message);
-      return body as ApiSuccess<AdminBooking[]>;
-    });
+    return authenticatedFetch(`/admin/bookings${query ? `?${query}` : ""}`, token).then(
+      async (res) => {
+        const body = await res.json();
+        if (!body.success) {
+          throw new ApiClientError(res.status, body.error?.code, body.error?.message);
+        }
+        return body as ApiSuccess<AdminBooking[]>;
+      }
+    );
   },
 
   adminGetBooking: (token: string, id: string) =>
-    request<AdminBookingDetail>(`/admin/bookings/${id}`, { token }),
+    authenticatedRequest<AdminBookingDetail>(`/admin/bookings/${id}`, { token }),
 };
 
 export type User = {

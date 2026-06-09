@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { logoutUser } from "@/lib/auth-client";
 import { useAuthStore } from "@/lib/auth-store";
 import { isAdminRole } from "@/lib/admin-utils";
+import { BrandLogo } from "@/components/brand-logo";
 import { Container } from "@/components/ui/container";
 import { Button } from "@/components/ui/button";
 
 export function Navbar() {
-  const { user, accessToken, logout } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
   const [mounted, setMounted] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -23,14 +25,7 @@ export function Navbar() {
     <header className="sticky top-0 z-50 border-b border-(--border) bg-white/90 backdrop-blur-md">
       <Container>
         <div className="flex h-16 items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-(--accent) text-sm font-black text-white">
-              H
-            </span>
-            <span className="hidden text-base font-bold tracking-tight text-stone-900 sm:block">
-              HTB<span className="text-(--accent)">Ticket</span>
-            </span>
-          </Link>
+          <BrandLogo />
 
           <nav className="hidden items-center gap-1 md:flex">
             <Link href="/events" className={navLink}>
@@ -50,7 +45,7 @@ export function Navbar() {
                 <span className="max-w-[120px] truncate text-sm text-stone-500">
                   {user?.full_name}
                 </span>
-                <button onClick={logout} className={`${navLink} text-stone-500`}>
+                <button onClick={() => void logoutUser()} className={`${navLink} text-stone-500`}>
                   Keluar
                 </button>
               </>
@@ -99,7 +94,7 @@ export function Navbar() {
                 </Link>
                 <button
                   onClick={() => {
-                    logout();
+                    void logoutUser();
                     setMenuOpen(false);
                   }}
                   className={`${navLink} text-left`}

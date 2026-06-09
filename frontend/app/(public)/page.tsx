@@ -25,7 +25,7 @@ export default async function HomePage() {
           <div className="max-w-2xl animate-fade-up">
             <p className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium backdrop-blur-sm">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              Platform ticketing siap traffic tinggi
+              Eventra — siap traffic tinggi
             </p>
             <h1 className="mt-6 text-4xl font-bold leading-[1.1] tracking-tight sm:text-5xl lg:text-6xl">
               Temukan event.

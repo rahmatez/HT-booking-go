@@ -1,7 +1,7 @@
 .PHONY: help up down logs migrate-up migrate-down migrate-create seed backend frontend dev test lint
 
 help:
-	@echo "High-Traffic Booking — available commands:"
+	@echo "Eventra — available commands:"
 	@echo "  make up            Start PostgreSQL & Redis"
 	@echo "  make down          Stop containers"
 	@echo "  make migrate-up    Run database migrations"
@@ -41,7 +41,10 @@ frontend:
 	cd frontend && npm run dev
 
 test:
-	cd backend && go test ./...
+	cd backend && go test -short ./...
+
+test-integration:
+	cd backend && go test -v -count=1 ./internal/booking/... -run TestConcurrentHoldLastTicket
 
 lint:
 	cd backend && golangci-lint run ./...

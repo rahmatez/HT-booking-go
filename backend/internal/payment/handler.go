@@ -100,8 +100,8 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 
 // SimulatePayment — development fallback when Midtrans keys are not set.
 func (h *Handler) SimulatePayment(w http.ResponseWriter, r *http.Request) {
-	if h.cfg.AppEnv == "production" {
-		response.Forbidden(w, "not available in production")
+	if h.cfg.AppEnv != "development" {
+		response.Forbidden(w, "simulate payment only available in development")
 		return
 	}
 

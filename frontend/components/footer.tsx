@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { BrandWordmark } from "@/components/brand-logo";
 import { Container } from "@/components/ui/container";
+import { BRAND_DESCRIPTION } from "@/lib/brand";
 
 export function Footer() {
   return (
@@ -8,11 +10,10 @@ export function Footer() {
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2">
             <p className="text-lg font-bold tracking-tight text-stone-900">
-              HTB<span className="text-(--accent)">Ticket</span>
+              <BrandWordmark />
             </p>
             <p className="mt-3 max-w-sm text-sm leading-relaxed text-stone-500">
-              Platform tiket event terpercaya. Aman, cepat, dan siap menangani antrean
-              ratusan ribu pembeli sekaligus.
+              {BRAND_DESCRIPTION}
             </p>
           </div>
           <div>
@@ -56,7 +57,7 @@ export function Footer() {
           </div>
         </div>
         <div className="mt-10 flex flex-col gap-2 border-t border-(--border) pt-8 text-xs text-stone-400 sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} HTB Ticket. Semua hak dilindungi.</p>
+          <p>© {new Date().getFullYear()} Eventra. Semua hak dilindungi.</p>
           <p>Dukungan pembayaran aman · E-ticket instan</p>
         </div>
       </Container>

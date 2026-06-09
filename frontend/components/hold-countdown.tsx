@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Props = {
   expiresAt: string;
@@ -10,14 +10,24 @@ type Props = {
 export function HoldCountdown({ expiresAt, onExpired }: Props) {
   const [remaining, setRemaining] = useState("");
   const [urgent, setUrgent] = useState(false);
+  const onExpiredRef = useRef(onExpired);
+  const firedRef = useRef(false);
 
   useEffect(() => {
+    onExpiredRef.current = onExpired;
+  }, [onExpired]);
+
+  useEffect(() => {
+    firedRef.current = false;
     const tick = () => {
       const diff = new Date(expiresAt).getTime() - Date.now();
       if (diff <= 0) {
         setRemaining("00:00");
         setUrgent(true);
-        onExpired?.();
+        if (!firedRef.current) {
+          firedRef.current = true;
+          onExpiredRef.current?.();
+        }
         return;
       }
       const mins = Math.floor(diff / 60000);
@@ -28,7 +38,7 @@ export function HoldCountdown({ expiresAt, onExpired }: Props) {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [expiresAt, onExpired]);
+  }, [expiresAt]);
 
   return (
     <div

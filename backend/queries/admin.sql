@@ -37,5 +37,5 @@ SELECT
     (SELECT COUNT(*) FROM events WHERE status = 'published') AS published_events,
     (SELECT COUNT(*) FROM bookings) AS total_bookings,
     (SELECT COUNT(*) FROM bookings WHERE status = 'confirmed') AS confirmed_bookings,
-    (SELECT COALESCE(SUM(total_amount), 0) FROM bookings WHERE status = 'confirmed') AS total_revenue,
-    (SELECT COALESCE(SUM(sold_count), 0) FROM ticket_types) AS tickets_sold;
+    (SELECT COALESCE(SUM(total_amount), 0)::bigint FROM bookings WHERE status = 'confirmed') AS total_revenue,
+    (SELECT COALESCE(SUM(sold_count), 0)::bigint FROM ticket_types) AS tickets_sold;
