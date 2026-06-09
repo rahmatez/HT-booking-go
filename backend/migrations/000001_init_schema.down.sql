@@ -1,0 +1,16 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS tickets;
+DROP TABLE IF EXISTS payments;
+DROP TABLE IF EXISTS booking_items;
+DROP TABLE IF EXISTS bookings;
+DROP TABLE IF EXISTS ticket_types;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS venues;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS users;
+
+DROP TYPE IF EXISTS payment_status;
+DROP TYPE IF EXISTS ticket_status;
+DROP TYPE IF EXISTS booking_status;
+DROP TYPE IF EXISTS event_status;
+DROP TYPE IF EXISTS user_role;
