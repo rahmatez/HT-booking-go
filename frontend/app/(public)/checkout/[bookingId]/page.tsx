@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { HoldCountdown } from "@/components/hold-countdown";
-import { api, Booking, formatIDR } from "@/lib/api";
+import { api, ApiClientError, Booking, formatIDR } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { isMidtransConfigured, loadMidtransSnap, openMidtransSnap } from "@/lib/midtrans";
 import { Container } from "@/components/ui/container";
@@ -85,8 +85,14 @@ export default function CheckoutPage() {
       await api.confirmBooking(accessToken, booking.id);
       await api.simulatePayment(accessToken, booking.id);
       router.push(`/bookings/${booking.id}`);
-    } catch {
-      setError("Pembayaran gagal. Silakan coba lagi.");
+    } catch (err) {
+      const msg =
+        err instanceof ApiClientError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Pembayaran gagal. Silakan coba lagi.";
+      setError(msg);
       setPaying(false);
     }
   };
