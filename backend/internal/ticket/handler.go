@@ -1,6 +1,7 @@
 package ticket
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -91,4 +92,71 @@ func (h *Handler) GetByCode(w http.ResponseWriter, r *http.Request) {
 		"status":      ticket.Status,
 		"booking_id":  ticket.BookingID,
 	})
+}
+
+func (h *Handler) DownloadPDF(w http.ResponseWriter, r *http.Request) {
+	user, ok := authctx.GetUser(r.Context())
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+
+	bookingID, err := uuid.Parse(chi.URLParam(r, "bookingId"))
+	if err != nil {
+		response.BadRequest(w, "invalid booking id")
+		return
+	}
+	ticketID, err := uuid.Parse(chi.URLParam(r, "ticketId"))
+	if err != nil {
+		response.BadRequest(w, "invalid ticket id")
+		return
+	}
+
+	if _, err := h.queries.GetBookingByIDForUser(r.Context(), db.GetBookingByIDForUserParams{
+		ID:     bookingID,
+		UserID: user.ID,
+	}); err != nil {
+		response.NotFound(w, "booking not found")
+		return
+	}
+
+	tickets, err := h.queries.ListTicketsByBooking(r.Context(), bookingID)
+	if err != nil {
+		response.Internal(w, "failed to load ticket")
+		return
+	}
+
+	var found *db.ListTicketsByBookingRow
+	for i := range tickets {
+		if tickets[i].ID == ticketID {
+			found = &tickets[i]
+			break
+		}
+	}
+	if found == nil {
+		response.NotFound(w, "ticket not found")
+		return
+	}
+
+	booking, err := h.queries.GetBookingByIDAdmin(r.Context(), bookingID)
+	if err != nil {
+		response.Internal(w, "failed to load booking")
+		return
+	}
+
+	pdfBytes, err := GeneratePDF(PDFInput{
+		EventTitle: booking.EventTitle,
+		HolderName: booking.UserName,
+		TicketCode: found.TicketCode,
+		TicketType: found.TicketTypeName,
+		BookingID:  bookingID.String(),
+	})
+	if err != nil {
+		response.Internal(w, "failed to generate pdf")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="ticket-%s.pdf"`, found.TicketCode))
+	w.Write(pdfBytes)
 }

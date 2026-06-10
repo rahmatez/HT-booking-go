@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { PageHero } from "@/components/public/page-hero";
 import { api, BookingSummary, formatDate, formatIDR } from "@/lib/api";
 import { bookingStatusLabel, bookingStatusTone } from "@/lib/booking-utils";
 import { useAuthStore } from "@/lib/auth-store";
@@ -34,18 +35,20 @@ export default function BookingsPage() {
   }, [hydrated, accessToken, isAuthenticated, router]);
 
   return (
-    <div className="py-10 sm:py-14">
-      <Container narrow>
-        <h1 className="text-3xl font-bold tracking-tight text-stone-900">Tiket Saya</h1>
-        <p className="mt-2 text-stone-500">Semua pembelian dan e-ticket kamu ada di sini.</p>
+    <>
+      <PageHero
+        title="Tiket Saya"
+        subtitle="Semua pembelian dan e-ticket kamu ada di sini."
+      />
 
-        {error && (
-          <div className="mt-6 rounded-xl bg-(--danger-soft) px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
+      <div className="py-10 sm:py-12">
+        <Container narrow>
+          {error && (
+            <div className="mb-6 rounded-(--radius) bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
 
-        <div className="mt-10">
           {!hydrated || loading ? (
             <div className="flex justify-center py-20">
               <Spinner className="h-8 w-8" />
@@ -63,33 +66,36 @@ export default function BookingsPage() {
                 <Link
                   key={b.id}
                   href={`/bookings/${b.id}`}
-                  className="group block rounded-2xl border border-(--border) bg-white p-5 shadow-(--shadow-sm) transition hover:border-stone-300 hover:shadow-(--shadow-md)"
+                  className="group flex overflow-hidden rounded-lg border border-(--border) bg-white shadow-(--shadow-sm) transition hover:border-blue-200 hover:shadow-(--shadow-md)"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex w-2 shrink-0 bg-(--accent)" />
+                  <div className="flex flex-1 flex-col p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <div>
-                      <h2 className="font-semibold text-stone-900 group-hover:text-(--accent)">
-                        {b.event_title}
-                      </h2>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="font-semibold text-slate-900 group-hover:text-(--accent)">
+                          {b.event_title}
+                        </h2>
+                        <Badge tone={bookingStatusTone[b.status] || "neutral"}>
+                          {bookingStatusLabel[b.status] || b.status}
+                        </Badge>
+                      </div>
                       {b.event_starts_at && (
-                        <p className="mt-1 text-sm text-stone-500">{formatDate(b.event_starts_at)}</p>
+                        <p className="mt-1.5 text-sm text-slate-500">
+                          {formatDate(b.event_starts_at)}
+                        </p>
                       )}
                     </div>
-                    <Badge tone={bookingStatusTone[b.status] || "neutral"}>
-                      {bookingStatusLabel[b.status] || b.status}
-                    </Badge>
-                  </div>
-                  <div className="mt-4 flex items-center justify-between border-t border-(--border) pt-4">
-                    <p className="font-bold text-stone-900">{formatIDR(b.total_amount)}</p>
-                    <span className="text-sm font-medium text-stone-400 group-hover:text-(--accent)">
-                      Lihat detail →
-                    </span>
+                    <div className="mt-3 flex items-center justify-between gap-4 sm:mt-0 sm:flex-col sm:items-end">
+                      <p className="text-lg font-bold text-slate-900">{formatIDR(b.total_amount)}</p>
+                      <span className="text-sm font-medium text-(--accent)">Detail →</span>
+                    </div>
                   </div>
                 </Link>
               ))}
             </div>
           )}
-        </div>
-      </Container>
-    </div>
+        </Container>
+      </div>
+    </>
   );
 }

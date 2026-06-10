@@ -124,13 +124,35 @@ async function authenticatedFetch(
 }
 
 export const api = {
-  register: (data: { email: string; password: string; full_name: string; phone?: string }) =>
+  register: (data: {
+    email: string;
+    password: string;
+    full_name: string;
+    phone?: string;
+    captcha_token?: string;
+  }) =>
     request<{ user: User; tokens: Tokens }>("/auth/register", {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  login: (data: { email: string; password: string }) =>
+  downloadTicketPdf: async (token: string, bookingId: string, ticketId: string) => {
+    const validToken = await getValidAccessToken(token);
+    if (!validToken) throw new ApiClientError(401, "UNAUTHORIZED", "Authentication required");
+    const res = await fetch(`${API_URL}/bookings/${bookingId}/tickets/${ticketId}/pdf`, {
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    if (!res.ok) throw new ApiClientError(res.status, "DOWNLOAD_FAILED", "Gagal unduh PDF");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ticket-${ticketId}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  login: (data: { email: string; password: string; captcha_token?: string }) =>
     request<{ user: User; tokens: Tokens }>("/auth/login", {
       method: "POST",
       body: JSON.stringify(data),
@@ -150,9 +172,24 @@ export const api = {
 
   me: (token: string) => authenticatedRequest<User>("/auth/me", { token }),
 
-  listEvents: (params?: { q?: string; page?: number }) => {
+  getHomepage: () =>
+    request<{
+      banners: HomepageBanner[];
+      categories: EventCategory[];
+      events: Event[];
+    }>("/homepage"),
+
+  listCategories: () => request<EventCategory[]>("/categories"),
+
+  listEvents: (params?: { q?: string; category?: string; city?: string; date_from?: string; date_to?: string; price_min?: number; price_max?: number; page?: number }) => {
     const qs = new URLSearchParams();
     if (params?.q) qs.set("q", params.q);
+    if (params?.category) qs.set("category", params.category);
+    if (params?.city) qs.set("city", params.city);
+    if (params?.date_from) qs.set("date_from", params.date_from);
+    if (params?.date_to) qs.set("date_to", params.date_to);
+    if (params?.price_min) qs.set("price_min", String(params.price_min));
+    if (params?.price_max) qs.set("price_max", String(params.price_max));
     if (params?.page) qs.set("page", String(params.page));
     const query = qs.toString();
     return fetch(`${API_URL}/events${query ? `?${query}` : ""}`).then(async (res) => {
@@ -165,13 +202,40 @@ export const api = {
   getEvent: (slug: string) =>
     request<{ event: Event; ticket_types: TicketType[] }>(`/events/${slug}`),
 
+  getQueueConfig: (slug: string) =>
+    request<{ enabled: boolean; capacity: number }>(`/events/${slug}/queue/config`),
+
+  joinQueue: (slug: string) =>
+    request<{ token: string; position: number; estimated_seconds: number; status: string }>(
+      `/events/${slug}/queue/join`,
+      { method: "POST" }
+    ),
+
+  getQueueStatus: (slug: string, token: string) =>
+    request<{ status: string; position?: number; estimated_seconds?: number }>(
+      `/events/${slug}/queue/status?token=${encodeURIComponent(token)}`
+    ),
+
   getAvailability: (slug: string) =>
     request<Availability[]>(`/events/${slug}/availability`),
+
+  validatePromo: (data: { code: string; event_id: string; subtotal: number }) =>
+    request<{
+      code: string;
+      discount_amount: number;
+      final_total: number;
+      subtotal: number;
+    }>("/promos/validate", { method: "POST", body: JSON.stringify(data) }),
 
   holdBooking: (
     token: string,
     idempotencyKey: string,
-    data: { event_id: string; items: { ticket_type_id: string; quantity: number }[] }
+    data: {
+      event_id: string;
+      items: { ticket_type_id: string; quantity: number }[];
+      promo_code?: string;
+      queue_token?: string;
+    }
   ) =>
     authenticatedRequest<Booking>("/bookings/hold", {
       method: "POST",
@@ -226,6 +290,9 @@ export const api = {
   adminStats: (token: string) =>
     authenticatedRequest<AdminStats>("/admin/dashboard/stats", { token }),
 
+  adminDashboardTrend: (token: string, days = 14) =>
+    authenticatedRequest<DailyTrendRow[]>(`/admin/dashboard/trend?days=${days}`, { token }),
+
   adminListEvents: (token: string, params?: { status?: string; q?: string; page?: number }) => {
     const qs = new URLSearchParams();
     if (params?.status) qs.set("status", params.status);
@@ -274,6 +341,39 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  adminUpdateTicketType: (token: string, eventId: string, ticketTypeId: string, data: AdminTicketTypeInput) =>
+    authenticatedRequest<AdminTicketType>(`/admin/events/${eventId}/ticket-types/${ticketTypeId}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminDeleteTicketType: (token: string, eventId: string, ticketTypeId: string) =>
+    authenticatedRequest<{ message: string }>(`/admin/events/${eventId}/ticket-types/${ticketTypeId}`, {
+      method: "DELETE",
+      token,
+    }),
+
+  adminGetOrganizerPayout: (token: string, organizerId: string) =>
+    authenticatedRequest<{ bank_name?: string; account_number?: string; account_holder?: string }>(
+      `/admin/organizers/${organizerId}/payout`,
+      { token }
+    ),
+
+  adminUpsertOrganizerPayout: (
+    token: string,
+    organizerId: string,
+    data: { bank_name: string; account_number: string; account_holder: string }
+  ) =>
+    authenticatedRequest<{ message: string }>(`/admin/organizers/${organizerId}/payout`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminQueueDLQStats: (token: string) =>
+    authenticatedRequest<{ dlq_size: number }>("/admin/queue/dlq", { token }),
+
   adminListVenues: (token: string) =>
     authenticatedRequest<Venue[]>("/admin/venues", { token }),
 
@@ -306,6 +406,230 @@ export const api = {
 
   adminGetBooking: (token: string, id: string) =>
     authenticatedRequest<AdminBookingDetail>(`/admin/bookings/${id}`, { token }),
+
+  forgotPassword: (email: string) =>
+    request<{ message: string }>("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: (token: string, newPassword: string) =>
+    request<{ message: string }>("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ token, new_password: newPassword }),
+    }),
+
+  verifyEmail: (token: string) =>
+    request<{ message: string }>("/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  requestVerifyEmail: (token: string) =>
+    authenticatedRequest<{ message: string }>("/auth/request-verify-email", {
+      method: "POST",
+      token,
+    }),
+
+  adminListPayments: (token: string, params?: { status?: string; page?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.page) qs.set("page", String(params.page));
+    const query = qs.toString();
+    return authenticatedFetch(`/admin/payments${query ? `?${query}` : ""}`, token).then(
+      async (res) => {
+        const body = await res.json();
+        if (!body.success) throw new ApiClientError(res.status, body.error?.code, body.error?.message);
+        return body as ApiSuccess<AdminPayment[]>;
+      }
+    );
+  },
+
+  adminListUsers: (token: string, params?: { q?: string; page?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.page) qs.set("page", String(params.page));
+    const query = qs.toString();
+    return authenticatedFetch(`/admin/users${query ? `?${query}` : ""}`, token).then(
+      async (res) => {
+        const body = await res.json();
+        if (!body.success) throw new ApiClientError(res.status, body.error?.code, body.error?.message);
+        return body as ApiSuccess<AdminUser[]>;
+      }
+    );
+  },
+
+  adminGetSettings: (token: string) =>
+    authenticatedRequest<AppSettings>("/admin/settings", { token }),
+
+  adminUpdateSettings: (token: string, key: string, value: Record<string, unknown>) =>
+    authenticatedRequest<{ message: string }>(`/admin/settings/${key}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(value),
+    }),
+
+  adminListAudit: (token: string, page = 1) =>
+    authenticatedFetch(`/admin/audit?page=${page}`, token).then(async (res) => {
+      const body = await res.json();
+      if (!body.success) throw new ApiClientError(res.status, body.error?.code, body.error?.message);
+      return body as ApiSuccess<AuditLogEntry[]>;
+    }),
+
+  adminSalesReport: (token: string) =>
+    authenticatedRequest<SalesReportRow[]>("/admin/reports/sales", { token }),
+
+  adminExportBookingsUrl: () => `${API_URL}/admin/reports/exports/bookings`,
+
+  adminRefundBooking: (token: string, bookingId: string) =>
+    authenticatedRequest<{ message: string }>(`/admin/bookings/${bookingId}/refund`, {
+      method: "POST",
+      token,
+    }),
+
+  adminListPromos: (token: string) =>
+    authenticatedRequest<PromoCode[]>("/admin/promos", { token }),
+
+  adminCreatePromo: (token: string, data: PromoCodeInput) =>
+    authenticatedRequest<{ id: string; code: string }>("/admin/promos", {
+      method: "POST",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminCheckIn: (token: string, ticketCode: string) =>
+    authenticatedRequest<CheckInResult>("/admin/check-in/scan", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ ticket_code: ticketCode }),
+    }),
+
+  adminListCategories: (token: string) =>
+    authenticatedRequest<EventCategory[]>("/admin/categories", { token }),
+
+  adminCreateCategory: (token: string, data: { slug: string; name: string; sort_order?: number }) =>
+    authenticatedRequest<{ id: string; slug: string; name: string }>("/admin/categories", {
+      method: "POST",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminListBanners: (token: string) =>
+    authenticatedRequest<HomepageBanner[]>("/admin/banners", { token }),
+
+  adminCreateBanner: (
+    token: string,
+    data: { title: string; subtitle?: string; image_url?: string; link_url?: string; sort_order?: number; active?: boolean }
+  ) =>
+    authenticatedRequest<{ id: string; title: string }>("/admin/banners", {
+      method: "POST",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminListModeration: (token: string, page = 1) =>
+    authenticatedFetch(`/admin/moderation?page=${page}`, token).then(async (res) => {
+      const body = await res.json();
+      if (!body.success) throw new ApiClientError(res.status, body.error?.code, body.error?.message);
+      return body as ApiSuccess<AdminEvent[]>;
+    }),
+
+  adminModerateEvent: (token: string, eventId: string, action: "approve" | "reject") =>
+    authenticatedRequest<{ status: string }>(`/admin/moderation/${eventId}`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({ action }),
+    }),
+
+  adminListAttendees: (token: string, eventId: string) =>
+    authenticatedRequest<AttendeeRow[]>(`/admin/events/${eventId}/attendees`, { token }),
+
+  adminExportAttendeesUrl: (eventId: string) =>
+    `${API_URL}/admin/events/${eventId}/attendees/export`,
+
+  adminUpdateCategory: (token: string, id: string, data: { slug: string; name: string; sort_order?: number }) =>
+    authenticatedRequest<{ message: string }>(`/admin/categories/${id}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminDeleteCategory: (token: string, id: string) =>
+    authenticatedRequest<{ message: string }>(`/admin/categories/${id}`, { method: "DELETE", token }),
+
+  adminUpdateBanner: (
+    token: string,
+    id: string,
+    data: { title: string; subtitle?: string; image_url?: string; link_url?: string; sort_order?: number; active?: boolean }
+  ) =>
+    authenticatedRequest<{ message: string }>(`/admin/banners/${id}`, {
+      method: "PUT",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminDeleteBanner: (token: string, id: string) =>
+    authenticatedRequest<{ message: string }>(`/admin/banners/${id}`, { method: "DELETE", token }),
+
+  adminListOrganizers: (token: string) =>
+    authenticatedRequest<OrganizerUser[]>("/admin/organizers", { token }),
+
+  adminCreateOrganizer: (token: string, data: { email: string; full_name: string; password: string }) =>
+    authenticatedRequest<{ id: string; email: string }>("/admin/organizers", {
+      method: "POST",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminListStaff: (token: string, eventId?: string) => {
+    const qs = eventId ? `?event_id=${eventId}` : "";
+    return authenticatedRequest<EventStaffRow[]>(`/admin/staff${qs}`, { token });
+  },
+
+  adminAssignStaff: (token: string, eventId: string, userId: string) =>
+    authenticatedRequest<{ message: string }>("/admin/staff", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ event_id: eventId, user_id: userId }),
+    }),
+
+  adminRemoveStaff: (token: string, id: string) =>
+    authenticatedRequest<{ message: string }>(`/admin/staff/${id}`, { method: "DELETE", token }),
+
+  adminListGateStaff: (token: string) =>
+    authenticatedRequest<OrganizerUser[]>("/admin/gate-staff", { token }),
+
+  adminCreateGateStaff: (token: string, data: { email: string; full_name: string; password: string }) =>
+    authenticatedRequest<{ id: string; email: string }>("/admin/gate-staff", {
+      method: "POST",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminListSettlements: (token: string) =>
+    authenticatedRequest<SettlementRow[]>("/admin/settlements", { token }),
+
+  adminCreateSettlement: (
+    token: string,
+    data: { organizer_id: string; period_start: string; period_end: string; fee_percent?: number }
+  ) =>
+    authenticatedRequest<{ id: string; net_payout: number }>("/admin/settlements", {
+      method: "POST",
+      token,
+      body: JSON.stringify(data),
+    }),
+
+  adminMarkSettlementPaid: (token: string, id: string) =>
+    authenticatedRequest<{ message: string }>(`/admin/settlements/${id}/paid`, {
+      method: "POST",
+      token,
+    }),
+
+  adminCheckInStats: (token: string, eventId: string) =>
+    authenticatedRequest<{ checked_in: number; total: number }>(
+      `/admin/check-in/stats/${eventId}`,
+      { token }
+    ),
 };
 
 export type User = {
@@ -332,6 +656,25 @@ export type Event = {
   venue_name?: string;
   venue_city?: string;
   cover_image_url?: string;
+  category_slug?: string;
+  category_name?: string;
+};
+
+export type EventCategory = {
+  id: string;
+  slug: string;
+  name: string;
+  sort_order?: number;
+};
+
+export type HomepageBanner = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  image_url?: string;
+  link_url?: string;
+  sort_order?: number;
+  active?: boolean;
 };
 
 export type TicketType = {
@@ -340,6 +683,8 @@ export type TicketType = {
   price: number;
   available: number;
   max_per_order: number;
+  sale_status?: string;
+  tier_label?: string;
 };
 
 export type Availability = {
@@ -355,6 +700,9 @@ export type Booking = {
   status: string;
   hold_expires_at: string;
   total_amount: number;
+  subtotal_amount?: number;
+  discount_amount?: number;
+  promo_code?: string;
   items: {
     ticket_type_id: string;
     ticket_type_name: string;
@@ -412,7 +760,12 @@ export type AdminEvent = {
   created_at: string;
 };
 
-export type AdminEventDetail = Event & { venue_id?: string };
+export type AdminEventDetail = Event & {
+  venue_id?: string;
+  category_id?: string;
+  waiting_room_enabled?: boolean;
+  waiting_room_capacity?: number;
+};
 
 export type AdminTicketType = TicketType & {
   total_quota?: number;
@@ -426,10 +779,13 @@ export type AdminEventInput = {
   title: string;
   description?: string;
   venue_id?: string;
+  category_id?: string;
   cover_image_url?: string;
   status?: string;
   starts_at: string;
   ends_at: string;
+  waiting_room_enabled?: boolean;
+  waiting_room_capacity?: number;
 };
 
 export type AdminTicketTypeInput = {
@@ -473,6 +829,132 @@ export type AdminBookingDetail = AdminBooking & {
     quantity: number;
     unit_price: number;
   }[];
+  payments?: AdminPayment[];
+};
+
+export type DailyTrendRow = {
+  day: string;
+  revenue: number;
+  bookings: number;
+  tickets: number;
+};
+
+export type AttendeeRow = {
+  ticket_code: string;
+  status: string;
+  user_name: string;
+  user_email: string;
+  ticket_type: string;
+  booking_id: string;
+  checked_in_at?: string;
+};
+
+export type OrganizerUser = {
+  id: string;
+  email: string;
+  full_name: string;
+  event_count?: number;
+  created_at?: string;
+};
+
+export type EventStaffRow = {
+  id: string;
+  event_id: string;
+  user_id: string;
+  user_email: string;
+  user_name: string;
+  event_title: string;
+};
+
+export type SettlementRow = {
+  id: string;
+  organizer_id: string;
+  organizer_name: string;
+  period_start: string;
+  period_end: string;
+  gross_revenue: number;
+  platform_fee: number;
+  net_payout: number;
+  status: string;
+  paid_at?: string;
+  created_at: string;
+};
+
+export type AdminPayment = {
+  id: string;
+  booking_id: string;
+  gateway: string;
+  gateway_ref?: string;
+  amount: number;
+  status: string;
+  paid_at?: string;
+  created_at: string;
+  user_email: string;
+  event_title: string;
+  booking_status: string;
+};
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  email_verified_at?: string;
+  created_at: string;
+};
+
+export type AppSettings = {
+  general?: Record<string, unknown>;
+  integrations?: Record<string, unknown>;
+  email_templates?: Record<string, unknown>;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  actor_id?: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type SalesReportRow = {
+  event_id: string;
+  event_title: string;
+  tickets_sold: number;
+  revenue: number;
+  booking_count: number;
+};
+
+export type PromoCode = {
+  id: string;
+  code: string;
+  discount_type: string;
+  discount_value: number;
+  max_uses?: number;
+  used_count: number;
+  valid_from: string;
+  valid_until: string;
+  active: boolean;
+};
+
+export type PromoCodeInput = {
+  code: string;
+  discount_type: "percent" | "fixed";
+  discount_value: number;
+  max_uses?: number;
+  event_id?: string;
+  valid_from: string;
+  valid_until: string;
+};
+
+export type CheckInResult = {
+  ticket_code: string;
+  event_title: string;
+  holder_name: string;
+  checked_in_at: string;
+  message: string;
 };
 
 export function formatIDR(amount: number): string {

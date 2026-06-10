@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,15 +11,25 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/catalog"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/authctx"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/response"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/queue"
 )
 
-type Handler struct {
-	svc *Service
+type PaymentRefunder interface {
+	RefundBooking(ctx context.Context, bookingID uuid.UUID) error
+	RefundEventBookings(ctx context.Context, eventID uuid.UUID) (int, error)
 }
 
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+type Handler struct {
+	svc        *Service
+	paymentSvc PaymentRefunder
+	jobQueue   *queue.RedisQueue
+}
+
+func NewHandler(svc *Service, paymentSvc PaymentRefunder, jobQueue *queue.RedisQueue) *Handler {
+	return &Handler{svc: svc, paymentSvc: paymentSvc, jobQueue: jobQueue}
 }
 
 func (h *Handler) DashboardStats(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +55,8 @@ func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("per_page"))
 
-	events, total, err := h.svc.ListEvents(r.Context(), status, search, page, perPage)
+	user, _ := authctx.GetUser(r.Context())
+	events, total, err := h.svc.ListEvents(r.Context(), user.Role, user.ID, status, search, page, perPage)
 	if err != nil {
 		response.Internal(w, "failed to list events")
 		return
@@ -101,8 +113,18 @@ func (h *Handler) GetEvent(w http.ResponseWriter, r *http.Request) {
 		ticketTypes = append(ticketTypes, catalog.TicketTypeToMap(tt))
 	}
 
+	eventMap := catalog.EventToMap(*event, "", "")
+	if catID, err := h.svc.Queries().GetEventCategoryID(r.Context(), id); err == nil && catID.Valid {
+		eventMap["category_id"] = uuid.UUID(catID.Bytes)
+	}
+	wr, _ := h.svc.Queries().GetEventWaitingRoom(r.Context(), id)
+	eventMap["waiting_room_enabled"] = wr.WaitingRoomEnabled
+	if wr.WaitingRoomCapacity.Valid {
+		eventMap["waiting_room_capacity"] = wr.WaitingRoomCapacity.Int32
+	}
+
 	response.OK(w, map[string]interface{}{
-		"event":        catalog.EventToMap(*event, "", ""),
+		"event":        eventMap,
 		"ticket_types": ticketTypes,
 	})
 }
@@ -118,10 +140,17 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, _ := authctx.GetUser(r.Context())
+	if user.Role == "organizer" {
+		in.Status = "draft"
+	}
 	event, err := h.svc.Catalog().CreateEvent(r.Context(), in)
 	if err != nil {
 		response.Internal(w, "failed to create event")
 		return
+	}
+	if user.Role == "organizer" {
+		_ = h.svc.Queries().SetEventOrganizer(r.Context(), event.ID, user.ID)
 	}
 	response.Created(w, catalog.EventToMap(event, "", ""))
 }
@@ -139,10 +168,18 @@ func (h *Handler) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, _ := authctx.GetUser(r.Context())
+	if user.Role == "organizer" {
+		in.Status = "draft"
+	}
+
 	event, err := h.svc.Catalog().UpdateEvent(r.Context(), id, in)
 	if err != nil {
 		response.Internal(w, "failed to update event")
 		return
+	}
+	if in.Status == "cancelled" {
+		h.enqueueRefundBatch(r.Context(), id)
 	}
 	response.OK(w, catalog.EventToMap(event, "", ""))
 }
@@ -166,6 +203,42 @@ func (h *Handler) CreateTicketType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Created(w, catalog.TicketTypeToMap(tt))
+}
+
+func (h *Handler) UpdateTicketType(w http.ResponseWriter, r *http.Request) {
+	ticketTypeID, err := uuid.Parse(chi.URLParam(r, "ticketTypeId"))
+	if err != nil {
+		response.BadRequest(w, "invalid ticket type id")
+		return
+	}
+	var in catalog.CreateTicketTypeInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+	tt, err := h.svc.Catalog().UpdateTicketType(r.Context(), ticketTypeID, in)
+	if err != nil {
+		response.Internal(w, "failed to update ticket type")
+		return
+	}
+	response.OK(w, catalog.TicketTypeToMap(tt))
+}
+
+func (h *Handler) DeleteTicketType(w http.ResponseWriter, r *http.Request) {
+	ticketTypeID, err := uuid.Parse(chi.URLParam(r, "ticketTypeId"))
+	if err != nil {
+		response.BadRequest(w, "invalid ticket type id")
+		return
+	}
+	if err := h.svc.Catalog().DeleteTicketType(r.Context(), ticketTypeID); err != nil {
+		if errors.Is(err, db.ErrTicketTypeInUse) {
+			response.Conflict(w, "TICKET_TYPE_IN_USE", "tipe tiket sudah memiliki penjualan atau hold")
+			return
+		}
+		response.Internal(w, "failed to delete ticket type")
+		return
+	}
+	response.OK(w, map[string]string{"message": "deleted"})
 }
 
 func (h *Handler) CreateVenue(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +278,8 @@ func (h *Handler) ListBookings(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("per_page"))
 
-	bookings, total, err := h.svc.ListBookings(r.Context(), status, eventID, page, perPage)
+	user, _ := authctx.GetUser(r.Context())
+	bookings, total, err := h.svc.ListBookings(r.Context(), user.Role, user.ID, status, eventID, page, perPage)
 	if err != nil {
 		response.Internal(w, "failed to list bookings")
 		return
@@ -265,6 +339,22 @@ func (h *Handler) GetBooking(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	payments, _ := h.svc.Queries().ListPaymentsByBooking(r.Context(), id)
+	paymentMaps := make([]map[string]interface{}, 0, len(payments))
+	for _, p := range payments {
+		pm := map[string]interface{}{
+			"id": p.ID, "gateway": p.Gateway, "amount": p.Amount,
+			"status": p.Status, "created_at": p.CreatedAt,
+		}
+		if p.GatewayRef.Valid {
+			pm["gateway_ref"] = p.GatewayRef.String
+		}
+		if p.PaidAt.Valid {
+			pm["paid_at"] = p.PaidAt.Time
+		}
+		paymentMaps = append(paymentMaps, pm)
+	}
+
 	response.OK(w, map[string]interface{}{
 		"id":            booking.ID,
 		"user_email":    booking.UserEmail,
@@ -275,5 +365,6 @@ func (h *Handler) GetBooking(w http.ResponseWriter, r *http.Request) {
 		"total_amount":  booking.TotalAmount,
 		"created_at":      booking.CreatedAt,
 		"items":         itemMaps,
+		"payments":      paymentMaps,
 	})
 }

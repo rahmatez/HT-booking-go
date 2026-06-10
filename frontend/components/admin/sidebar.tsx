@@ -3,50 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BRAND_NAME } from "@/lib/brand";
-
-const links = [
-  {
-    href: "/admin",
-    label: "Dashboard",
-    exact: true,
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="3" width="7" height="7" rx="1" />
-        <rect x="14" y="3" width="7" height="7" rx="1" />
-        <rect x="3" y="14" width="7" height="7" rx="1" />
-        <rect x="14" y="14" width="7" height="7" rx="1" />
-      </svg>
-    ),
-  },
-  {
-    href: "/admin/events",
-    label: "Event",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="9" />
-        <path d="M12 7v5l3 3" />
-      </svg>
-    ),
-  },
-  {
-    href: "/admin/bookings",
-    label: "Booking",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M4 6h16M4 12h16M4 18h10" />
-      </svg>
-    ),
-  },
-  {
-    href: "/admin/venues",
-    label: "Venue",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6" />
-      </svg>
-    ),
-  },
-];
+import { filterNavForRole } from "@/lib/admin-nav";
+import { useAuthStore } from "@/lib/auth-store";
 
 type Props = {
   open?: boolean;
@@ -55,6 +13,8 @@ type Props = {
 
 export function AdminSidebar({ open = false, onNavigate }: Props) {
   const pathname = usePathname();
+  const role = useAuthStore((s) => s.user?.role);
+  const sections = filterNavForRole(role);
 
   return (
     <aside
@@ -68,27 +28,35 @@ export function AdminSidebar({ open = false, onNavigate }: Props) {
         </p>
         <p className="mt-1 text-sm font-semibold text-white">{BRAND_NAME}</p>
       </div>
-      <nav className="flex-1 space-y-0.5 p-3">
-        {links.map((link) => {
-          const active = link.exact ? pathname === link.href : pathname.startsWith(link.href);
-          return (
-            <Link
-              key={link.href}
-              href={link.href}
-              onClick={onNavigate}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                active
-                  ? "bg-stone-800 text-white ring-1 ring-stone-700"
-                  : "text-stone-400 hover:bg-stone-900 hover:text-stone-200"
-              }`}
-            >
-              <span className={active ? "text-orange-400" : "opacity-70"} aria-hidden>
-                {link.icon}
-              </span>
-              {link.label}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 overflow-y-auto p-3">
+        {sections.map((section) => (
+          <div key={section.title} className="mb-4">
+            <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-wider text-stone-600">
+              {section.title}
+            </p>
+            <div className="space-y-0.5">
+              {section.items.map((link) => {
+                const active = link.exact
+                  ? pathname === link.href
+                  : pathname.startsWith(link.href);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={onNavigate}
+                    className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                      active
+                        ? "bg-stone-800 text-white ring-1 ring-stone-700"
+                        : "text-stone-400 hover:bg-stone-900 hover:text-stone-200"
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
       <div className="border-t border-stone-800 p-3">
         <Link
@@ -96,10 +64,7 @@ export function AdminSidebar({ open = false, onNavigate }: Props) {
           onClick={onNavigate}
           className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-stone-500 transition hover:bg-stone-900 hover:text-stone-300"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-          Kembali ke situs
+          ← Kembali ke situs
         </Link>
       </div>
     </aside>

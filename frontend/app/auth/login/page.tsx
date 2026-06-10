@@ -7,6 +7,7 @@ import { api, ApiClientError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { safeRedirect } from "@/lib/safe-redirect";
 import { AuthShell } from "@/components/auth/auth-shell";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -16,6 +17,8 @@ function LoginForm() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const turnstileEnabled = Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -23,9 +26,14 @@ function LoginForm() {
     setError("");
     const form = new FormData(e.currentTarget);
     try {
+      if (turnstileEnabled && !captchaToken) {
+        setError("Selesaikan verifikasi CAPTCHA");
+        return;
+      }
       const res = await api.login({
         email: String(form.get("email")),
         password: String(form.get("password")),
+        ...(captchaToken ? { captcha_token: captchaToken } : {}),
       });
       setAuth(res.user, res.tokens);
       router.push(safeRedirect(searchParams.get("redirect")));
@@ -73,6 +81,12 @@ function LoginForm() {
             {error}
           </div>
         )}
+        <div className="text-right">
+          <Link href="/auth/forgot-password" className="text-sm text-(--accent) hover:underline">
+            Lupa password?
+          </Link>
+        </div>
+        <TurnstileWidget onToken={setCaptchaToken} />
         <Button type="submit" disabled={loading} fullWidth size="lg">
           {loading ? "Memproses..." : "Masuk"}
         </Button>

@@ -22,16 +22,29 @@ var (
 	ErrEmailTaken       = errors.New("email already registered")
 	ErrInvalidCreds     = errors.New("invalid email or password")
 	ErrInvalidToken     = errors.New("invalid refresh token")
+	ErrInvalidReset     = errors.New("invalid or expired reset token")
+	ErrAlreadyVerified  = errors.New("email already verified")
 )
 
-type Service struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
-	jwt     *JWTService
+type EmailSender interface {
+	SendVerifyEmail(to, name, verifyURL string)
+	SendResetPasswordEmail(to, name, resetURL string)
 }
 
-func NewService(pool *pgxpool.Pool, queries *db.Queries, jwt *JWTService) *Service {
-	return &Service{pool: pool, queries: queries, jwt: jwt}
+type Service struct {
+	pool        *pgxpool.Pool
+	queries     *db.Queries
+	jwt         *JWTService
+	frontendURL string
+	email       EmailSender
+}
+
+func NewService(pool *pgxpool.Pool, queries *db.Queries, jwt *JWTService, frontendURL string) *Service {
+	return &Service{pool: pool, queries: queries, jwt: jwt, frontendURL: frontendURL}
+}
+
+func (s *Service) SetEmailSender(e EmailSender) {
+	s.email = e
 }
 
 type TokenPair struct {
@@ -229,4 +242,90 @@ func ValidatePassword(password string) error {
 		return fmt.Errorf("password must be at least 8 characters")
 	}
 	return nil
+}
+
+func (s *Service) RequestEmailVerification(ctx context.Context, userID uuid.UUID) error {
+	user, err := s.queries.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.EmailVerifiedAt.Valid {
+		return ErrAlreadyVerified
+	}
+	raw, err := generateRefreshToken()
+	if err != nil {
+		return err
+	}
+	if err := s.queries.CreateEmailVerificationToken(ctx, userID, hashToken(raw), time.Now().Add(24*time.Hour)); err != nil {
+		return err
+	}
+	if s.email != nil {
+		verifyURL := fmt.Sprintf("%s/auth/verify-email?token=%s", s.frontendURL, raw)
+		s.email.SendVerifyEmail(user.Email, user.FullName, verifyURL)
+	}
+	return nil
+}
+
+func (s *Service) VerifyEmail(ctx context.Context, token string) error {
+	t, err := s.queries.GetEmailVerificationToken(ctx, hashToken(token))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidReset
+		}
+		return err
+	}
+	if t.UsedAt.Valid || time.Now().After(t.ExpiresAt) {
+		return ErrInvalidReset
+	}
+	if err := s.queries.MarkEmailVerificationUsed(ctx, hashToken(token)); err != nil {
+		return err
+	}
+	_, err = s.queries.UpdateUserEmailVerified(ctx, t.UserID)
+	return err
+}
+
+func (s *Service) ForgotPassword(ctx context.Context, email string) error {
+	user, err := s.queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // don't reveal if email exists
+		}
+		return err
+	}
+	raw, err := generateRefreshToken()
+	if err != nil {
+		return err
+	}
+	if err := s.queries.CreatePasswordResetToken(ctx, user.ID, hashToken(raw), time.Now().Add(time.Hour)); err != nil {
+		return err
+	}
+	if s.email != nil {
+		resetURL := fmt.Sprintf("%s/auth/reset-password?token=%s", s.frontendURL, raw)
+		s.email.SendResetPasswordEmail(user.Email, user.FullName, resetURL)
+	}
+	return nil
+}
+
+func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return err
+	}
+	t, err := s.queries.GetPasswordResetToken(ctx, hashToken(token))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidReset
+		}
+		return err
+	}
+	if t.UsedAt.Valid || time.Now().After(t.ExpiresAt) {
+		return ErrInvalidReset
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if err := s.queries.UpdateUserPassword(ctx, t.UserID, string(hash)); err != nil {
+		return err
+	}
+	return s.queries.MarkPasswordResetUsed(ctx, hashToken(token))
 }

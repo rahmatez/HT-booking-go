@@ -1,5 +1,9 @@
 export function isAdminRole(role?: string): boolean {
-  return role === "admin" || role === "organizer";
+  return role === "admin" || role === "organizer" || role === "gate_staff";
+}
+
+export function isPlatformAdmin(role?: string): boolean {
+  return role === "admin";
 }
 
 /** ISO string → value untuk input datetime-local */

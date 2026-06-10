@@ -60,7 +60,14 @@ export default function AdminEditEventPage() {
         title="Edit Event"
         description={event.title}
         action={
-          event.slug ? (
+          <div className="flex gap-3">
+            <Link
+              href={`/admin/events/${id}/attendees`}
+              className="text-sm font-semibold text-stone-600 hover:text-(--accent)"
+            >
+              Daftar tamu
+            </Link>
+            {event.slug ? (
             <Link
               href={`/events/${event.slug}`}
               target="_blank"
@@ -68,7 +75,8 @@ export default function AdminEditEventPage() {
             >
               Lihat di situs →
             </Link>
-          ) : undefined
+            ) : undefined}
+          </div>
         }
       />
       <EventForm

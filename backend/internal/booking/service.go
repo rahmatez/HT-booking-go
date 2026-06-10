@@ -17,6 +17,7 @@ import (
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/config"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/promo"
 	redisutil "github.com/rahmatez/high-traffic-booking/backend/internal/platform/redis"
 )
 
@@ -34,8 +35,10 @@ type HoldItem struct {
 }
 
 type HoldInput struct {
-	EventID uuid.UUID  `json:"event_id"`
-	Items   []HoldItem `json:"items"`
+	EventID    uuid.UUID  `json:"event_id"`
+	Items      []HoldItem `json:"items"`
+	PromoCode  string     `json:"promo_code"`
+	QueueToken string     `json:"queue_token"`
 }
 
 type Service struct {
@@ -44,10 +47,19 @@ type Service struct {
 	cfg       *config.Config
 	holdStore *redisutil.HoldStore
 	cache     *redisutil.Cache
+	promo     *promo.Service
+	queueGate QueueGate
 }
 
 func NewService(pool *pgxpool.Pool, queries *db.Queries, cfg *config.Config, holdStore *redisutil.HoldStore, cache *redisutil.Cache) *Service {
-	return &Service{pool: pool, queries: queries, cfg: cfg, holdStore: holdStore, cache: cache}
+	return &Service{
+		pool: pool, queries: queries, cfg: cfg, holdStore: holdStore, cache: cache,
+		promo: promo.NewService(queries),
+	}
+}
+
+func (s *Service) SetQueueGate(gate QueueGate) {
+	s.queueGate = gate
 }
 
 func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey string, in HoldInput) (*db.Booking, []db.ListBookingItemsRow, error) {
@@ -92,6 +104,16 @@ func (s *Service) Hold(ctx context.Context, userID uuid.UUID, idempotencyKey str
 	}
 	if eventHolds >= 1 {
 		return nil, nil, ErrHoldLimitReached
+	}
+
+	if s.queueGate != nil {
+		requires, err := s.queueGate.RequiresQueue(ctx, in.EventID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if requires && (in.QueueToken == "" || !s.queueGate.IsAdmitted(ctx, in.EventID, in.QueueToken)) {
+			return nil, nil, ErrQueueRequired
+		}
 	}
 
 	ticketTypeIDs := dedupeTicketTypeIDs(aggregated)
@@ -159,6 +181,18 @@ func (s *Service) holdInDB(ctx context.Context, userID uuid.UUID, idempotencyKey
 		return nil, nil, fmt.Errorf("event is not available for booking")
 	}
 
+	confirmedQty, err := qtx.CountUserConfirmedTicketsForEvent(ctx, userID, in.EventID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var newQty int32
+	for _, item := range aggregated {
+		newQty += item.Quantity
+	}
+	if confirmedQty+int64(newQty) > int64(s.cfg.BookingMaxTicketsPerOrder)*2 {
+		return nil, nil, fmt.Errorf("batas pembelian tiket untuk event ini tercapai")
+	}
+
 	typePrices := make(map[uuid.UUID]db.TicketType, len(aggregated))
 	var total int64
 	for _, item := range aggregated {
@@ -195,13 +229,21 @@ func (s *Service) holdInDB(ctx context.Context, userID uuid.UUID, idempotencyKey
 		total += int64(tt.Price) * int64(item.Quantity)
 	}
 
+	promoResult, err := s.promo.ValidateAndApply(ctx, in.PromoCode, in.EventID, total)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	holdExpires := time.Now().Add(s.cfg.BookingHoldTTL)
-	booking, err := qtx.CreateBooking(ctx, db.CreateBookingParams{
+	booking, err := qtx.CreateBookingWithPromo(ctx, db.CreateBookingWithPromoParams{
 		UserID:         userID,
 		EventID:        in.EventID,
 		Status:         string(db.BookingStatusHeld),
 		HoldExpiresAt:  holdExpires,
-		TotalAmount:    total,
+		SubtotalAmount: promoResult.Subtotal,
+		DiscountAmount: promoResult.DiscountAmount,
+		TotalAmount:    promoResult.FinalTotal,
+		PromoCode:      promoResult.Code,
 		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
@@ -253,6 +295,14 @@ func (s *Service) invalidateEventCache(ctx context.Context, eventID uuid.UUID) {
 		redisutil.CacheKey("event", event.Slug),
 	)
 	_ = s.cache.DeleteByPrefix(ctx, redisutil.CacheKey("events", "list"))
+}
+
+func (s *Service) GetBookingExtras(ctx context.Context, bookingID uuid.UUID) (db.BookingExtras, error) {
+	return s.queries.GetBookingExtras(ctx, bookingID)
+}
+
+func (s *Service) ValidatePromo(ctx context.Context, code string, eventID uuid.UUID, subtotal int64) (*promo.ApplyResult, error) {
+	return s.promo.ValidateAndApply(ctx, code, eventID, subtotal)
 }
 
 func (s *Service) GetByID(ctx context.Context, userID, bookingID uuid.UUID) (*db.Booking, []db.ListBookingItemsRow, error) {
@@ -443,6 +493,11 @@ func (s *Service) confirmPaymentInTx(ctx context.Context, qtx *db.Queries, booki
 		}
 	}
 
+	extras, _ := qtx.GetBookingExtras(ctx, bookingID)
+	if extras.PromoCode.Valid && extras.PromoCode.String != "" {
+		_ = s.promo.IncrementOnConfirm(ctx, extras.PromoCode.String)
+	}
+
 	return booking.EventID, nil
 }
 
@@ -588,6 +643,10 @@ func (s *Service) generateTicketCode(bookingID, ticketTypeID uuid.UUID) (string,
 }
 
 func BookingToMap(b db.Booking, items []db.ListBookingItemsRow) map[string]interface{} {
+	return BookingToMapWithExtras(b, items, db.BookingExtras{})
+}
+
+func BookingToMapWithExtras(b db.Booking, items []db.ListBookingItemsRow, extras db.BookingExtras) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":              b.ID,
 		"user_id":         b.UserID,
@@ -596,6 +655,15 @@ func BookingToMap(b db.Booking, items []db.ListBookingItemsRow) map[string]inter
 		"hold_expires_at": b.HoldExpiresAt,
 		"total_amount":    b.TotalAmount,
 		"created_at":      b.CreatedAt,
+	}
+	if extras.SubtotalAmount > 0 {
+		m["subtotal_amount"] = extras.SubtotalAmount
+	}
+	if extras.DiscountAmount > 0 {
+		m["discount_amount"] = extras.DiscountAmount
+	}
+	if extras.PromoCode.Valid {
+		m["promo_code"] = extras.PromoCode.String
 	}
 	if b.ConfirmedAt.Valid {
 		m["confirmed_at"] = b.ConfirmedAt.Time

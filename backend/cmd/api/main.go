@@ -10,14 +10,11 @@ import (
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
-	"github.com/rahmatez/high-traffic-booking/backend/internal/booking"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/config"
-	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/database"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/logger"
 	redisclient "github.com/rahmatez/high-traffic-booking/backend/internal/platform/redis"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/server"
-	"github.com/rahmatez/high-traffic-booking/backend/internal/worker"
 )
 
 func main() {
@@ -50,17 +47,11 @@ func main() {
 	}
 	defer redis.Close()
 
-	srv := server.New(cfg, log, pool, redis)
-
-	queries := db.New(pool)
-	cache := redisclient.NewCache(redis)
-	holdStore := redisclient.NewHoldStore(redis)
-	bookingSvc := booking.NewService(pool, queries, cfg, holdStore, cache)
-	holdWorker := worker.NewHoldExpiryWorker(queries, bookingSvc, log)
-	go holdWorker.Start(ctx)
+	app := server.NewApp(cfg, log, pool, redis)
+	app.StartBackground(ctx)
 
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := app.Server.Start(); err != nil {
 			log.Fatal("server error", zap.Error(err))
 		}
 	}()
@@ -74,7 +65,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := app.Server.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown error", zap.Error(err))
 	}
 }

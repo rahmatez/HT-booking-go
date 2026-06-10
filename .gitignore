@@ -39,3 +39,5 @@ redis_data/
 coverage.out
 coverage.html
 frontend/coverage/
+
+loadtests/k6/

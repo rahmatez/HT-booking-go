@@ -169,6 +169,12 @@ export default function AdminEventsPage() {
                       >
                         Edit
                       </Link>
+                      <Link
+                        href={`/admin/events/${e.id}/attendees`}
+                        className="text-xs font-medium text-stone-500 hover:text-(--accent)"
+                      >
+                        Tamu
+                      </Link>
                     </div>
                   </td>
                 </tr>

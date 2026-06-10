@@ -84,3 +84,53 @@ func (q *Queries) GetBookingByIDForUpdate(ctx context.Context, id uuid.UUID) (Bo
 	row := q.db.QueryRow(ctx, getBookingByIDForUpdate, id)
 	return scanBooking(row)
 }
+
+type BookingExtras struct {
+	PromoCode      pgtype.Text
+	DiscountAmount int64
+	SubtotalAmount int64
+}
+
+func (q *Queries) GetBookingExtras(ctx context.Context, bookingID uuid.UUID) (BookingExtras, error) {
+	var e BookingExtras
+	err := q.db.QueryRow(ctx, `
+		SELECT promo_code, discount_amount, subtotal_amount FROM bookings WHERE id = $1
+	`, bookingID).Scan(&e.PromoCode, &e.DiscountAmount, &e.SubtotalAmount)
+	return e, err
+}
+
+type CreateBookingWithPromoParams struct {
+	UserID         uuid.UUID
+	EventID        uuid.UUID
+	Status         string
+	HoldExpiresAt  time.Time
+	SubtotalAmount int64
+	DiscountAmount int64
+	TotalAmount    int64
+	PromoCode      string
+	IdempotencyKey string
+}
+
+func (q *Queries) CreateBookingWithPromo(ctx context.Context, arg CreateBookingWithPromoParams) (Booking, error) {
+	var promo pgtype.Text
+	if arg.PromoCode != "" {
+		promo = pgtype.Text{String: arg.PromoCode, Valid: true}
+	}
+	row := q.db.QueryRow(ctx, `
+		INSERT INTO bookings (user_id, event_id, status, hold_expires_at, subtotal_amount, discount_amount, total_amount, promo_code, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, user_id, event_id, status, hold_expires_at, total_amount, idempotency_key, created_at, confirmed_at
+	`, arg.UserID, arg.EventID, arg.Status, arg.HoldExpiresAt, arg.SubtotalAmount, arg.DiscountAmount, arg.TotalAmount, promo, arg.IdempotencyKey)
+	return scanBooking(row)
+}
+
+func (q *Queries) CountUserConfirmedTicketsForEvent(ctx context.Context, userID, eventID uuid.UUID) (int64, error) {
+	var n int64
+	err := q.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(bi.quantity), 0)::bigint
+		FROM bookings b
+		JOIN booking_items bi ON bi.booking_id = b.id
+		WHERE b.user_id = $1 AND b.event_id = $2 AND b.status = 'confirmed'
+	`, userID, eventID).Scan(&n)
+	return n, err
+}

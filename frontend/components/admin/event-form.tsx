@@ -9,6 +9,7 @@ import {
   AdminEventInput,
   AdminTicketType,
   AdminTicketTypeInput,
+  EventCategory,
   Venue,
   formatIDR,
 } from "@/lib/api";
@@ -33,6 +34,7 @@ export function EventForm({
   onSaved,
 }: Props) {
   const [venues, setVenues] = useState<Venue[]>([]);
+  const [categories, setCategories] = useState<EventCategory[]>([]);
   const [ticketTypes, setTicketTypes] = useState(initialTicketTypes);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +48,9 @@ export function EventForm({
     status: initialEvent?.status || "draft",
     starts_at: initialEvent?.starts_at || new Date().toISOString(),
     ends_at: initialEvent?.ends_at || new Date(Date.now() + 3600000).toISOString(),
+    category_id: initialEvent?.category_id || "",
+    waiting_room_enabled: initialEvent?.waiting_room_enabled || false,
+    waiting_room_capacity: initialEvent?.waiting_room_capacity || 100,
   });
 
   const [newTicket, setNewTicket] = useState<AdminTicketTypeInput>({
@@ -56,9 +61,11 @@ export function EventForm({
     sales_start_at: new Date().toISOString(),
     sales_end_at: new Date(Date.now() + 30 * 86400000).toISOString(),
   });
+  const [editingTicketId, setEditingTicketId] = useState<string | null>(null);
 
   useEffect(() => {
     api.adminListVenues(token).then(setVenues).catch(() => {});
+    api.listCategories().then(setCategories).catch(() => {});
   }, [token]);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -69,6 +76,7 @@ export function EventForm({
       const payload: AdminEventInput = {
         ...form,
         venue_id: form.venue_id || undefined,
+        category_id: form.category_id || undefined,
       };
       if (eventId) {
         await api.adminUpdateEvent(token, eventId, payload);
@@ -92,12 +100,50 @@ export function EventForm({
       return;
     }
     try {
-      const tt = await api.adminCreateTicketType(token, eventId, newTicket);
-      setTicketTypes((prev) => [...prev, tt]);
-      setMessage("Tipe tiket ditambahkan");
+      if (editingTicketId) {
+        const tt = await api.adminUpdateTicketType(token, eventId, editingTicketId, newTicket);
+        setTicketTypes((prev) => prev.map((t) => (t.id === editingTicketId ? tt : t)));
+        setEditingTicketId(null);
+        setMessage("Tipe tiket diperbarui");
+      } else {
+        const tt = await api.adminCreateTicketType(token, eventId, newTicket);
+        setTicketTypes((prev) => [...prev, tt]);
+        setMessage("Tipe tiket ditambahkan");
+      }
+      setNewTicket({
+        name: "Regular",
+        price: 100000,
+        total_quota: 100,
+        max_per_order: 4,
+        sales_start_at: new Date().toISOString(),
+        sales_end_at: new Date(Date.now() + 30 * 86400000).toISOString(),
+      });
     } catch {
-      setError("Gagal menambah tipe tiket");
+      setError("Gagal menyimpan tipe tiket");
     }
+  };
+
+  const handleDeleteTicketType = async (ticketTypeId: string) => {
+    if (!eventId || !confirm("Hapus tipe tiket ini?")) return;
+    try {
+      await api.adminDeleteTicketType(token, eventId, ticketTypeId);
+      setTicketTypes((prev) => prev.filter((t) => t.id !== ticketTypeId));
+      setMessage("Tipe tiket dihapus");
+    } catch {
+      setError("Gagal menghapus — mungkin sudah ada penjualan");
+    }
+  };
+
+  const startEditTicket = (tt: AdminTicketType) => {
+    setEditingTicketId(tt.id);
+    setNewTicket({
+      name: tt.name,
+      price: tt.price,
+      total_quota: tt.total_quota || 100,
+      max_per_order: tt.max_per_order,
+      sales_start_at: tt.sales_start_at || new Date().toISOString(),
+      sales_end_at: tt.sales_end_at || new Date(Date.now() + 30 * 86400000).toISOString(),
+    });
   };
 
   return (
@@ -162,6 +208,37 @@ export function EventForm({
             </select>
           </div>
           <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-stone-700">Kategori</label>
+            <select
+              className={fieldClass}
+              value={form.category_id || ""}
+              onChange={(e) => setForm({ ...form, category_id: e.target.value })}
+            >
+              <option value="">— Tanpa kategori —</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <label className="flex items-center gap-2 text-sm font-medium text-stone-700">
+              <input
+                type="checkbox"
+                checked={!!form.waiting_room_enabled}
+                onChange={(e) => setForm({ ...form, waiting_room_enabled: e.target.checked })}
+              />
+              Aktifkan waiting room (antrean virtual)
+            </label>
+            {form.waiting_room_enabled && (
+              <Input
+                type="number"
+                label="Kapasitas antrean aktif"
+                value={form.waiting_room_capacity || 100}
+                onChange={(e) => setForm({ ...form, waiting_room_capacity: Number(e.target.value) })}
+              />
+            )}
+          </div>
+          <div className="space-y-1.5">
             <label className="block text-sm font-medium text-stone-700">Mulai</label>
             <input
               type="datetime-local"
@@ -215,6 +292,17 @@ export function EventForm({
                   </span>
                   <span className="text-stone-500">
                     Kuota: {tt.available ?? tt.total_quota} / {tt.total_quota ?? "?"}
+                    {tt.sales_start_at && (
+                      <> · {new Date(tt.sales_start_at).toLocaleDateString("id-ID")}–{new Date(tt.sales_end_at || "").toLocaleDateString("id-ID")}</>
+                    )}
+                  </span>
+                  <span className="flex gap-2">
+                    <button type="button" className="text-xs font-semibold text-(--accent)" onClick={() => startEditTicket(tt)}>
+                      Edit
+                    </button>
+                    <button type="button" className="text-xs font-semibold text-red-600" onClick={() => handleDeleteTicketType(tt.id)}>
+                      Hapus
+                    </button>
                   </span>
                 </li>
               ))}
@@ -245,9 +333,27 @@ export function EventForm({
               value={newTicket.max_per_order}
               onChange={(e) => setNewTicket({ ...newTicket, max_per_order: Number(e.target.value) })}
             />
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-stone-600">Penjualan mulai (early bird)</label>
+              <input
+                type="datetime-local"
+                className={fieldClass}
+                value={toDatetimeLocal(newTicket.sales_start_at)}
+                onChange={(e) => setNewTicket({ ...newTicket, sales_start_at: fromDatetimeLocal(e.target.value) })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-stone-600">Penjualan berakhir</label>
+              <input
+                type="datetime-local"
+                className={fieldClass}
+                value={toDatetimeLocal(newTicket.sales_end_at)}
+                onChange={(e) => setNewTicket({ ...newTicket, sales_end_at: fromDatetimeLocal(e.target.value) })}
+              />
+            </div>
           </div>
           <Button type="button" variant="secondary" className="mt-4" onClick={handleAddTicketType}>
-            + Tambah Tipe Tiket
+            {editingTicketId ? "Simpan Perubahan Tiket" : "+ Tambah Tipe Tiket"}
           </Button>
         </div>
       )}

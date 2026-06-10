@@ -33,6 +33,8 @@ type CheckoutResult struct {
 	IsProduction bool   `json:"is_production"`
 }
 
+type OnPaymentConfirmed func(ctx context.Context, bookingID uuid.UUID)
+
 type Service struct {
 	pool        *pgxpool.Pool
 	queries     *db.Queries
@@ -40,12 +42,13 @@ type Service struct {
 	midtrans    *midtrans.Client
 	cfg         *config.Config
 	frontendURL string
+	onConfirmed OnPaymentConfirmed
 }
 
 func NewService(pool *pgxpool.Pool, queries *db.Queries, bookingSvc *booking.Service, mt *midtrans.Client, cfg *config.Config) *Service {
-	frontendURL := "http://localhost:3000"
-	if origins := cfg.CORSAllowedOrigins; len(origins) > 0 && origins[0] != "" {
-		frontendURL = origins[0]
+	frontendURL := cfg.FrontendURL
+	if frontendURL == "" && len(cfg.CORSAllowedOrigins) > 0 {
+		frontendURL = cfg.CORSAllowedOrigins[0]
 	}
 	return &Service{
 		pool:        pool,
@@ -55,6 +58,21 @@ func NewService(pool *pgxpool.Pool, queries *db.Queries, bookingSvc *booking.Ser
 		cfg:         cfg,
 		frontendURL: frontendURL,
 	}
+}
+
+func (s *Service) SetOnConfirmed(fn OnPaymentConfirmed) {
+	s.onConfirmed = fn
+}
+
+func (s *Service) ReconcilePayment(ctx context.Context, bookingID uuid.UUID) error {
+	if !s.midtrans.IsConfigured() {
+		return ErrNotConfigured
+	}
+	status, err := s.midtrans.GetTransactionStatus(ctx, bookingID.String())
+	if err != nil {
+		return err
+	}
+	return s.applyTransactionStatus(ctx, bookingID, *status)
 }
 
 func (s *Service) Checkout(ctx context.Context, userID, bookingID uuid.UUID) (*CheckoutResult, error) {
@@ -259,6 +277,9 @@ func (s *Service) applyTransactionStatus(ctx context.Context, bookingID uuid.UUI
 			return err
 		}
 		s.booking.AfterConfirm(ctx, bookingID, bookingRow.EventID)
+		if s.onConfirmed != nil {
+			s.onConfirmed(ctx, bookingID)
+		}
 		return nil
 
 	case midtrans.IsPaymentFailed(status.TransactionStatus):

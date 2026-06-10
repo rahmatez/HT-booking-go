@@ -11,6 +11,7 @@ import (
 
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/authctx"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/response"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/promo"
 )
 
 type Handler struct {
@@ -47,15 +48,20 @@ func (h *Handler) Hold(w http.ResponseWriter, r *http.Request) {
 			response.Conflict(w, "INVENTORY_EXHAUSTED", "tiket sudah habis")
 		case errors.Is(err, ErrHoldLimitReached):
 			response.Conflict(w, "HOLD_LIMIT_REACHED", "terlalu banyak hold aktif")
+		case errors.Is(err, ErrQueueRequired):
+			response.Fail(w, http.StatusForbidden, "QUEUE_REQUIRED", "masuk antrean virtual terlebih dahulu")
 		case errors.Is(err, ErrIdempotencyConflict):
 			response.Conflict(w, "IDEMPOTENCY_CONFLICT", "idempotency key sudah dipakai untuk permintaan lain")
+		case errors.Is(err, promo.ErrNotFound), errors.Is(err, promo.ErrInvalid), errors.Is(err, promo.ErrExpired), errors.Is(err, promo.ErrExhausted):
+			response.BadRequest(w, promo.PromoErrorMessage(err))
 		default:
 			response.BadRequest(w, err.Error())
 		}
 		return
 	}
 
-	response.Created(w, BookingToMap(*booking, items))
+	extras, _ := h.svc.GetBookingExtras(r.Context(), booking.ID)
+	response.Created(w, BookingToMapWithExtras(*booking, items, extras))
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +87,31 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, BookingToMap(*booking, items))
+	extras, _ := h.svc.GetBookingExtras(r.Context(), booking.ID)
+	response.OK(w, BookingToMapWithExtras(*booking, items, extras))
+}
+
+func (h *Handler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Code    string    `json:"code"`
+		EventID uuid.UUID `json:"event_id"`
+		Subtotal int64    `json:"subtotal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Code == "" || body.EventID == uuid.Nil {
+		response.BadRequest(w, "code and event_id required")
+		return
+	}
+	result, err := h.svc.ValidatePromo(r.Context(), body.Code, body.EventID, body.Subtotal)
+	if err != nil {
+		response.BadRequest(w, promo.PromoErrorMessage(err))
+		return
+	}
+	response.OK(w, map[string]interface{}{
+		"code":            result.Code,
+		"discount_amount": result.DiscountAmount,
+		"final_total":     result.FinalTotal,
+		"subtotal":        result.Subtotal,
+	})
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {

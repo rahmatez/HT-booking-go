@@ -130,6 +130,25 @@ export default function AdminBookingDetailPage() {
           </section>
 
           <section className="rounded-2xl border border-(--border) bg-white p-6 shadow-(--shadow-sm)">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-400">Pembayaran</h2>
+            {booking.payments && booking.payments.length > 0 ? (
+              <ul className="mt-4 space-y-3">
+                {booking.payments.map((p) => (
+                  <li key={p.id} className="rounded-xl border border-(--border) bg-stone-50/50 px-4 py-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="font-medium capitalize">{p.status}</span>
+                      <span>{formatIDR(p.amount)}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-stone-500">{p.gateway} · {formatDate(p.created_at)}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-sm text-stone-500">Belum ada riwayat pembayaran.</p>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-(--border) bg-white p-6 shadow-(--shadow-sm)">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-400">Referensi</h2>
             <p className="mt-3 break-all font-mono text-xs text-stone-500">{booking.id}</p>
           </section>

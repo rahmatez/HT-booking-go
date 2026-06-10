@@ -15,6 +15,7 @@ import (
 	"github.com/rahmatez/high-traffic-booking/backend/internal/auth"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/booking"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/catalog"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/checkin"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/config"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/db"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/payment"
@@ -23,7 +24,23 @@ import (
 	redisutil "github.com/rahmatez/high-traffic-booking/backend/internal/platform/redis"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/platform/response"
 	"github.com/rahmatez/high-traffic-booking/backend/internal/ticket"
+	"github.com/rahmatez/high-traffic-booking/backend/internal/waitingroom"
 )
+
+type routeDeps struct {
+	queries            *db.Queries
+	jwtSvc             *auth.JWTService
+	rateLimiter        *redisutil.RateLimiter
+	mtClient           *midtransclient.Client
+	authHandler        *auth.Handler
+	catalogHandler     *catalog.Handler
+	bookingHandler     *booking.Handler
+	waitingRoomHandler *waitingroom.Handler
+	paymentHandler     *payment.Handler
+	ticketHandler      *ticket.Handler
+	checkinHandler     *checkin.Handler
+	adminHandler       *admin.Handler
+}
 
 type Server struct {
 	cfg    *config.Config
@@ -34,31 +51,7 @@ type Server struct {
 	http   *http.Server
 }
 
-func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis.Client) *Server {
-	queries := db.New(pool)
-	jwtSvc := auth.NewJWTService(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
-
-	cache := redisutil.NewCache(redis)
-	holdStore := redisutil.NewHoldStore(redis)
-	rateLimiter := redisutil.NewRateLimiter(redis)
-
-	authSvc := auth.NewService(pool, queries, jwtSvc)
-	authHandler := auth.NewHandler(authSvc)
-
-	catalogSvc := catalog.NewService(queries, cache, cfg)
-	catalogHandler := catalog.NewHandler(catalogSvc)
-
-	bookingSvc := booking.NewService(pool, queries, cfg, holdStore, cache)
-	bookingHandler := booking.NewHandler(bookingSvc)
-
-	mtClient := midtransclient.NewClient(cfg.MidtransServerKey, cfg.MidtransClientKey, cfg.MidtransIsProduction)
-	paymentSvc := payment.NewService(pool, queries, bookingSvc, mtClient, cfg)
-	paymentHandler := payment.NewHandler(paymentSvc, queries, bookingSvc, cfg)
-	ticketHandler := ticket.NewHandler(queries)
-
-	adminSvc := admin.NewService(queries, catalogSvc)
-	adminHandler := admin.NewHandler(adminSvc)
-
+func newServer(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis.Client, deps routeDeps) *Server {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
@@ -67,80 +60,143 @@ func New(cfg *config.Config, log *zap.Logger, pool *pgxpool.Pool, redis *goredis
 	r.Use(middleware.RequestLogger(log))
 
 	r.Get("/healthz", healthz)
-	r.Get("/readyz", readyz(pool, redis))
+	r.Get("/readyz", readyz(pool, redis, deps.mtClient))
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Route("/auth", func(ar chi.Router) {
-			ar.With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+			ar.With(middleware.RateLimit(deps.rateLimiter, middleware.RateLimitConfig{
 				Scope:  "login",
 				Limit:  cfg.RateLimitLoginPerMin,
 				Window: cfg.RateLimitWindow,
 				KeyFn:  middleware.ClientIP,
-			})).Post("/register", authHandler.Register)
-			ar.With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+			})).Post("/register", deps.authHandler.Register)
+			ar.With(middleware.RateLimit(deps.rateLimiter, middleware.RateLimitConfig{
 				Scope:  "login",
 				Limit:  cfg.RateLimitLoginPerMin,
 				Window: cfg.RateLimitWindow,
 				KeyFn:  middleware.ClientIP,
-			})).Post("/login", authHandler.Login)
-			ar.Post("/refresh", authHandler.Refresh)
-			ar.Post("/logout", authHandler.Logout)
-			ar.With(middleware.Auth(jwtSvc)).Get("/me", authHandler.Me)
+			})).Post("/login", deps.authHandler.Login)
+			ar.Post("/refresh", deps.authHandler.Refresh)
+			ar.Post("/logout", deps.authHandler.Logout)
+			ar.Post("/forgot-password", deps.authHandler.ForgotPassword)
+			ar.Post("/reset-password", deps.authHandler.ResetPassword)
+			ar.Post("/verify-email", deps.authHandler.VerifyEmail)
+			ar.With(middleware.Auth(deps.jwtSvc)).Get("/me", deps.authHandler.Me)
+			ar.With(middleware.Auth(deps.jwtSvc)).Post("/request-verify-email", deps.authHandler.RequestVerifyEmail)
 		})
+
+		api.Get("/homepage", deps.catalogHandler.Homepage)
+		api.Get("/categories", deps.catalogHandler.ListCategories)
 
 		api.Route("/events", func(er chi.Router) {
-			er.Get("/", catalogHandler.ListEvents)
-			er.Get("/search", catalogHandler.ListEvents)
-			er.Get("/{slug}", catalogHandler.GetEvent)
-			er.Get("/{slug}/availability", catalogHandler.GetAvailability)
+			er.Get("/", deps.catalogHandler.ListEvents)
+			er.Get("/search", deps.catalogHandler.ListEvents)
+			er.Get("/{slug}", deps.catalogHandler.GetEvent)
+			er.Get("/{slug}/availability", deps.catalogHandler.GetAvailability)
+			er.Get("/{slug}/queue/config", deps.waitingRoomHandler.Config)
+			er.Post("/{slug}/queue/join", deps.waitingRoomHandler.Join)
+			er.Get("/{slug}/queue/status", deps.waitingRoomHandler.Status)
 		})
 
+		api.Post("/promos/validate", deps.bookingHandler.ValidatePromo)
+
 		api.Route("/bookings", func(br chi.Router) {
-			br.Use(middleware.Auth(jwtSvc))
-			br.With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+			br.Use(middleware.Auth(deps.jwtSvc))
+			br.With(middleware.RateLimit(deps.rateLimiter, middleware.RateLimitConfig{
 				Scope:  "hold",
 				Limit:  cfg.RateLimitHoldPerMin,
 				Window: cfg.RateLimitWindow,
 				KeyFn:  middleware.AuthUserID,
-			})).Post("/hold", bookingHandler.Hold)
-			br.Get("/", bookingHandler.List)
-			br.Get("/{id}", bookingHandler.Get)
-			br.Post("/{id}/confirm", bookingHandler.Confirm)
-			br.Delete("/{id}", bookingHandler.Cancel)
-			br.Get("/{id}/tickets", ticketHandler.ListByBooking)
+			})).Post("/hold", deps.bookingHandler.Hold)
+			br.Get("/", deps.bookingHandler.List)
+			br.Get("/{id}", deps.bookingHandler.Get)
+			br.Post("/{id}/confirm", deps.bookingHandler.Confirm)
+			br.Delete("/{id}", deps.bookingHandler.Cancel)
+			br.Get("/{id}/tickets", deps.ticketHandler.ListByBooking)
+			br.Get("/{bookingId}/tickets/{ticketId}/pdf", deps.ticketHandler.DownloadPDF)
 		})
 
 		api.Route("/payments", func(pr chi.Router) {
-			pr.Post("/webhook/{gateway}", paymentHandler.Webhook)
-			pr.With(middleware.Auth(jwtSvc)).With(middleware.RateLimit(rateLimiter, middleware.RateLimitConfig{
+			pr.Post("/webhook/{gateway}", deps.paymentHandler.Webhook)
+			pr.With(middleware.Auth(deps.jwtSvc)).With(middleware.RateLimit(deps.rateLimiter, middleware.RateLimitConfig{
 				Scope:  "checkout",
 				Limit:  cfg.RateLimitCheckoutPerMin,
 				Window: cfg.RateLimitWindow,
 				KeyFn:  middleware.AuthUserID,
-			})).Post("/checkout", paymentHandler.Checkout)
-			pr.With(middleware.Auth(jwtSvc)).Post("/sync", paymentHandler.Sync)
-			pr.With(middleware.Auth(jwtSvc)).Get("/{id}/status", paymentHandler.GetStatus)
-			pr.With(middleware.Auth(jwtSvc)).Post("/simulate", paymentHandler.SimulatePayment)
+			})).Post("/checkout", deps.paymentHandler.Checkout)
+			pr.With(middleware.Auth(deps.jwtSvc)).Post("/sync", deps.paymentHandler.Sync)
+			pr.With(middleware.Auth(deps.jwtSvc)).Get("/{id}/status", deps.paymentHandler.GetStatus)
+			pr.With(middleware.Auth(deps.jwtSvc)).Post("/simulate", deps.paymentHandler.SimulatePayment)
 		})
 
 		api.Route("/tickets", func(tr chi.Router) {
-			tr.Use(middleware.Auth(jwtSvc))
-			tr.Get("/{code}", ticketHandler.GetByCode)
+			tr.Use(middleware.Auth(deps.jwtSvc))
+			tr.Get("/{code}", deps.ticketHandler.GetByCode)
 		})
 
 		api.Route("/admin", func(ar chi.Router) {
-			ar.Use(middleware.Auth(jwtSvc))
-			ar.Use(middleware.RequireRoleDB(queries, "admin", "organizer"))
-			ar.Get("/dashboard/stats", adminHandler.DashboardStats)
-			ar.Get("/events", adminHandler.ListEvents)
-			ar.Post("/events", adminHandler.CreateEvent)
-			ar.Get("/events/{id}", adminHandler.GetEvent)
-			ar.Put("/events/{id}", adminHandler.UpdateEvent)
-			ar.Post("/events/{id}/ticket-types", adminHandler.CreateTicketType)
-			ar.Get("/venues", adminHandler.ListVenues)
-			ar.Post("/venues", adminHandler.CreateVenue)
-			ar.Get("/bookings", adminHandler.ListBookings)
-			ar.Get("/bookings/{id}", adminHandler.GetBooking)
+			ar.Use(middleware.Auth(deps.jwtSvc))
+			ar.Use(middleware.RequireRoleDB(deps.queries, "admin", "organizer", "gate_staff"))
+
+			ar.Get("/dashboard/stats", deps.adminHandler.DashboardStats)
+			ar.Get("/dashboard/trend", deps.adminHandler.DashboardTrend)
+			ar.Get("/events", deps.adminHandler.ListEvents)
+			ar.Post("/events", deps.adminHandler.CreateEvent)
+			ar.Get("/events/{id}", deps.adminHandler.GetEvent)
+			ar.Put("/events/{id}", deps.adminHandler.UpdateEvent)
+			ar.Get("/events/{id}/attendees", deps.adminHandler.ListAttendees)
+			ar.Get("/events/{id}/attendees/export", deps.adminHandler.ExportAttendees)
+			ar.Post("/events/{id}/ticket-types", deps.adminHandler.CreateTicketType)
+			ar.Put("/events/{id}/ticket-types/{ticketTypeId}", deps.adminHandler.UpdateTicketType)
+			ar.Delete("/events/{id}/ticket-types/{ticketTypeId}", deps.adminHandler.DeleteTicketType)
+			ar.Get("/venues", deps.adminHandler.ListVenues)
+			ar.Post("/venues", deps.adminHandler.CreateVenue)
+			ar.Get("/bookings", deps.adminHandler.ListBookings)
+			ar.Get("/bookings/{id}", deps.adminHandler.GetBooking)
+
+			ar.Get("/payments", deps.adminHandler.ListPayments)
+			ar.Get("/reports/sales", deps.adminHandler.SalesReport)
+			ar.Get("/reports/exports/bookings", deps.adminHandler.ExportBookings)
+			ar.Get("/promos", deps.adminHandler.ListPromos)
+			ar.Post("/promos", deps.adminHandler.CreatePromo)
+			ar.Post("/bookings/{id}/refund", deps.adminHandler.RefundBooking)
+
+			ar.Group(func(cr chi.Router) {
+				cr.Use(middleware.RequireRoleDB(deps.queries, "admin", "organizer", "gate_staff"))
+				cr.Post("/check-in/scan", deps.checkinHandler.Scan)
+				cr.Get("/check-in/stats/{eventId}", deps.checkinHandler.Stats)
+			})
+
+			ar.Group(func(adm chi.Router) {
+				adm.Use(middleware.RequireRoleDB(deps.queries, "admin"))
+				adm.Get("/users", deps.adminHandler.ListUsers)
+				adm.Get("/settings", deps.adminHandler.GetSettings)
+				adm.Put("/settings/{key}", deps.adminHandler.UpdateSettings)
+				adm.Get("/audit", deps.adminHandler.ListAuditLogs)
+				adm.Get("/categories", deps.adminHandler.ListCategories)
+				adm.Post("/categories", deps.adminHandler.CreateCategory)
+				adm.Put("/categories/{id}", deps.adminHandler.UpdateCategory)
+				adm.Delete("/categories/{id}", deps.adminHandler.DeleteCategory)
+				adm.Get("/banners", deps.adminHandler.ListBanners)
+				adm.Post("/banners", deps.adminHandler.CreateBanner)
+				adm.Put("/banners/{id}", deps.adminHandler.UpdateBanner)
+				adm.Delete("/banners/{id}", deps.adminHandler.DeleteBanner)
+				adm.Get("/moderation", deps.adminHandler.ListModeration)
+				adm.Post("/moderation/{id}", deps.adminHandler.ModerateEvent)
+				adm.Get("/organizers", deps.adminHandler.ListOrganizers)
+				adm.Post("/organizers", deps.adminHandler.CreateOrganizer)
+				adm.Get("/staff", deps.adminHandler.ListStaff)
+				adm.Post("/staff", deps.adminHandler.AssignStaff)
+				adm.Delete("/staff/{id}", deps.adminHandler.RemoveStaff)
+				adm.Get("/gate-staff", deps.adminHandler.ListGateStaff)
+				adm.Post("/gate-staff", deps.adminHandler.CreateGateStaff)
+				adm.Get("/settlements", deps.adminHandler.ListSettlements)
+				adm.Post("/settlements", deps.adminHandler.CreateSettlement)
+				adm.Post("/settlements/{id}/paid", deps.adminHandler.MarkSettlementPaid)
+				adm.Get("/organizers/{id}/payout", deps.adminHandler.GetOrganizerPayout)
+				adm.Put("/organizers/{id}/payout", deps.adminHandler.UpsertOrganizerPayout)
+				adm.Get("/queue/dlq", deps.adminHandler.QueueDLQStats)
+			})
 		})
 	})
 
@@ -174,17 +230,27 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, map[string]string{"status": "ok"})
 }
 
-func readyz(pool *pgxpool.Pool, redis *goredis.Client) http.HandlerFunc {
+func readyz(pool *pgxpool.Pool, redis *goredis.Client, mt *midtransclient.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		checks := map[string]string{}
 		if err := pool.Ping(ctx); err != nil {
+			checks["postgres"] = "down"
 			response.Fail(w, http.StatusServiceUnavailable, "NOT_READY", "database unavailable")
 			return
 		}
+		checks["postgres"] = "up"
 		if err := redis.Ping(ctx).Err(); err != nil {
+			checks["redis"] = "down"
 			response.Fail(w, http.StatusServiceUnavailable, "NOT_READY", "redis unavailable")
 			return
 		}
-		response.OK(w, map[string]string{"status": "ready"})
+		checks["redis"] = "up"
+		if mt.IsConfigured() {
+			checks["midtrans"] = "configured"
+		} else {
+			checks["midtrans"] = "not_configured"
+		}
+		response.OK(w, map[string]interface{}{"status": "ready", "checks": checks})
 	}
 }

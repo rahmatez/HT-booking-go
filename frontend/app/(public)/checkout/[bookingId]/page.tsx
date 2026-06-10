@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { HoldCountdown } from "@/components/hold-countdown";
+import { PageHero } from "@/components/public/page-hero";
 import { api, ApiClientError, Booking, formatIDR } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAuthHydrated } from "@/lib/use-auth-hydrated";
@@ -60,11 +61,7 @@ export default function CheckoutPage() {
       .finally(() => setLoading(false));
   }, [hydrated, accessToken, isAuthenticated, params.bookingId, router]);
 
-  const canPay =
-    booking &&
-    PAYABLE_STATUSES.has(booking.status) &&
-    !holdExpired &&
-    !paying;
+  const canPay = booking && PAYABLE_STATUSES.has(booking.status) && !holdExpired && !paying;
 
   const handlePay = async () => {
     if (!accessToken || !booking || !canPay) return;
@@ -133,76 +130,91 @@ export default function CheckoutPage() {
 
   if (!booking) {
     return (
-      <Container narrow className="py-16 text-center">
-        <p className="text-red-600">{error || "Pemesanan tidak ditemukan"}</p>
-        <Link href="/events" className="mt-4 inline-block text-(--accent)">
-          Kembali ke event
-        </Link>
-      </Container>
+      <>
+        <PageHero title="Checkout" />
+        <Container narrow className="py-16 text-center">
+          <p className="text-red-600">{error || "Pemesanan tidak ditemukan"}</p>
+          <Link href="/events" className="mt-4 inline-block font-medium text-(--accent)">
+            Kembali ke event
+          </Link>
+        </Container>
+      </>
     );
   }
 
   return (
-    <div className="py-10 sm:py-14">
-      <Container narrow>
-        <div className="mb-2 text-sm font-medium text-stone-400">Langkah terakhir</div>
-        <h1 className="text-3xl font-bold tracking-tight text-stone-900">Checkout</h1>
+    <>
+      <PageHero title="Checkout" subtitle="Selesaikan pembayaran sebelum waktu habis" />
 
-        <div className="mt-8">
-          <HoldCountdown expiresAt={booking.hold_expires_at} onExpired={handleHoldExpired} />
-        </div>
+      <div className="py-10 sm:py-12">
+        <Container narrow>
+          <div className="grid gap-6 lg:grid-cols-5">
+            <div className="lg:col-span-3 space-y-6">
+              <HoldCountdown expiresAt={booking.hold_expires_at} onExpired={handleHoldExpired} />
 
-        <div className="mt-6 rounded-2xl border border-(--border) bg-white p-6 shadow-(--shadow-md)">
-          <h2 className="font-semibold text-stone-900">Ringkasan pesanan</h2>
-          <div className="mt-4 space-y-3">
-            {booking.items?.map((item) => (
-              <div key={item.ticket_type_id} className="flex justify-between text-sm">
-                <span className="text-stone-600">
-                  {item.ticket_type_name}{" "}
-                  <span className="text-stone-400">× {item.quantity}</span>
-                </span>
-                <span className="font-medium text-stone-900">
-                  {formatIDR(item.unit_price * item.quantity)}
-                </span>
+              <div className="rounded-lg border border-(--border) bg-white p-6 shadow-(--shadow-sm)">
+                <h2 className="font-bold text-slate-900">Ringkasan Pesanan</h2>
+                <div className="mt-4 space-y-3">
+                  {booking.items?.map((item) => (
+                    <div key={item.ticket_type_id} className="flex justify-between text-sm">
+                      <span className="text-slate-600">
+                        {item.ticket_type_name}{" "}
+                        <span className="text-slate-400">× {item.quantity}</span>
+                      </span>
+                      <span className="font-medium text-slate-900">
+                        {formatIDR(item.unit_price * item.quantity)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {booking.discount_amount ? (
+                  <div className="mt-4 flex justify-between text-sm text-emerald-700">
+                    <span>Diskon {booking.promo_code}</span>
+                    <span>-{formatIDR(booking.discount_amount)}</span>
+                  </div>
+                ) : null}
               </div>
-            ))}
-          </div>
-          <div className="mt-5 flex items-center justify-between border-t border-(--border) pt-5">
-            <span className="font-semibold text-stone-900">Total</span>
-            <span className="text-2xl font-bold text-(--accent)">
-              {formatIDR(booking.total_amount)}
-            </span>
-          </div>
-        </div>
+            </div>
 
-        {error && (
-          <div className="mt-4 rounded-xl bg-(--danger-soft) px-4 py-3 text-sm text-red-700">
-            {error}
+            <div className="lg:col-span-2">
+              <div className="sticky top-[calc(var(--header-h)+1rem)] rounded-lg border border-(--border) bg-white p-6 shadow-(--shadow-md)">
+                <p className="text-sm text-slate-500">Total pembayaran</p>
+                <p className="mt-1 text-3xl font-bold text-(--accent)">
+                  {formatIDR(booking.total_amount)}
+                </p>
+
+                {error && (
+                  <div className="mt-4 rounded-(--radius) bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {error}
+                  </div>
+                )}
+
+                <Button
+                  onClick={handlePay}
+                  disabled={!canPay}
+                  fullWidth
+                  size="lg"
+                  className="mt-6"
+                >
+                  {paying ? "Membuka pembayaran..." : "Bayar Sekarang"}
+                </Button>
+
+                <p className="mt-4 text-center text-xs leading-relaxed text-slate-400">
+                  {midtransReady ? (
+                    <>
+                      Pembayaran aman via Midtrans Snap.
+                      <br />
+                      Sandbox: kartu test 4811 1111 1111 1114
+                    </>
+                  ) : (
+                    "Midtrans belum dikonfigurasi — mode simulasi aktif."
+                  )}
+                </p>
+              </div>
+            </div>
           </div>
-        )}
-
-        <Button
-          onClick={handlePay}
-          disabled={!canPay}
-          fullWidth
-          size="lg"
-          className="mt-6"
-        >
-          {paying ? "Membuka pembayaran..." : "Bayar Sekarang"}
-        </Button>
-
-        <p className="mt-4 text-center text-xs leading-relaxed text-stone-400">
-          {midtransReady ? (
-            <>
-              Pembayaran aman via Midtrans Snap.
-              <br />
-              Sandbox: gunakan kartu test 4811 1111 1111 1114.
-            </>
-          ) : (
-            "Midtrans belum dikonfigurasi — mode simulasi pembayaran aktif."
-          )}
-        </p>
-      </Container>
-    </div>
+        </Container>
+      </div>
+    </>
   );
 }

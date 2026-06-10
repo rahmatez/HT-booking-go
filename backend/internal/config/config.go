@@ -9,9 +9,10 @@ import (
 )
 
 type Config struct {
-	AppEnv  string
-	AppPort string
-	AppURL  string
+	AppEnv       string
+	AppPort      string
+	AppURL       string
+	FrontendURL  string
 
 	DatabaseURL        string
 	DatabaseMaxOpen    int
@@ -40,6 +41,8 @@ type Config struct {
 	ResendAPIKey  string
 	EmailFrom     string
 
+	TurnstileSecretKey string
+
 	CORSAllowedOrigins []string
 
 	RedisCacheEventsTTL time.Duration
@@ -56,7 +59,8 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		AppEnv:  getEnv("APP_ENV", "development"),
 		AppPort: getEnv("APP_PORT", "8080"),
-		AppURL:  getEnv("APP_URL", "http://localhost:8080"),
+		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 
 		DatabaseURL:     getEnv("DATABASE_URL", "postgres://booking:secret@localhost:5433/booking?sslmode=disable"),
 		DatabaseMaxOpen: getEnvInt("DATABASE_MAX_OPEN_CONNS", 25),
@@ -80,6 +84,8 @@ func Load() (*Config, error) {
 		EmailProvider: getEnv("EMAIL_PROVIDER", "resend"),
 		ResendAPIKey:  getEnv("RESEND_API_KEY", ""),
 		EmailFrom:     getEnv("EMAIL_FROM", "noreply@booking.local"),
+
+		TurnstileSecretKey: getEnv("TURNSTILE_SECRET_KEY", ""),
 	}
 
 	var err error

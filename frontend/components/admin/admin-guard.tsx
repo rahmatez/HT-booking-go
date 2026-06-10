@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Spinner } from "@/components/ui/spinner";
 import { useAuthStore } from "@/lib/auth-store";
@@ -10,6 +10,7 @@ import { isAdminRole } from "@/lib/admin-utils";
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const hydrated = useAuthHydrated();
   const { user, accessToken } = useAuthStore();
 
@@ -40,6 +41,15 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
       >
         <Spinner className="h-6 w-6" />
         <span className="text-sm">Mengalihkan ke login...</span>
+      </div>
+    );
+  }
+
+  if (user?.role === "gate_staff" && !pathname.startsWith("/admin/check-in")) {
+    router.replace("/admin/check-in");
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-stone-100 text-stone-500">
+        <Spinner className="h-6 w-6" />
       </div>
     );
   }

@@ -19,11 +19,6 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-type listEventsCache struct {
-	Events []db.ListPublishedEventsRow `json:"events"`
-	Total  int64                       `json:"total"`
-}
-
 type eventDetailCache struct {
 	Event       db.Event        `json:"event"`
 	TicketTypes []db.TicketType `json:"ticket_types"`
@@ -42,15 +37,18 @@ func NewService(queries *db.Queries, cache *redisutil.Cache, cfg *config.Config)
 }
 
 type CreateEventInput struct {
-	Slug          string                 `json:"slug"`
-	Title         string                 `json:"title"`
-	Description   string                 `json:"description"`
-	VenueID       *uuid.UUID             `json:"venue_id"`
-	CoverImageURL string                 `json:"cover_image_url"`
-	Status        string                 `json:"status"`
-	StartsAt      time.Time              `json:"starts_at"`
-	EndsAt        time.Time              `json:"ends_at"`
-	Metadata      map[string]interface{} `json:"metadata"`
+	Slug                 string                 `json:"slug"`
+	Title                string                 `json:"title"`
+	Description          string                 `json:"description"`
+	VenueID              *uuid.UUID             `json:"venue_id"`
+	CategoryID           *uuid.UUID             `json:"category_id"`
+	CoverImageURL        string                 `json:"cover_image_url"`
+	Status               string                 `json:"status"`
+	StartsAt             time.Time              `json:"starts_at"`
+	EndsAt               time.Time              `json:"ends_at"`
+	Metadata             map[string]interface{} `json:"metadata"`
+	WaitingRoomEnabled   bool                   `json:"waiting_room_enabled"`
+	WaitingRoomCapacity  int32                  `json:"waiting_room_capacity"`
 }
 
 type CreateTicketTypeInput struct {
@@ -71,7 +69,20 @@ type CreateVenueInput struct {
 	Longitude *float64 `json:"longitude"`
 }
 
-func (s *Service) ListEvents(ctx context.Context, search string, page, perPage int) ([]db.ListPublishedEventsRow, int64, error) {
+type ListEventsFilter struct {
+	Search       string
+	CategorySlug string
+	City         string
+	DateFrom     string
+	DateTo       string
+	PriceMin     int64
+	PriceMax     int64
+	Page         int
+	PerPage      int
+}
+
+func (s *Service) ListEventsFiltered(ctx context.Context, f ListEventsFilter) ([]db.PublishedEventRow, int64, error) {
+	page, perPage := f.Page, f.PerPage
 	if page < 1 {
 		page = 1
 	}
@@ -80,33 +91,29 @@ func (s *Service) ListEvents(ctx context.Context, search string, page, perPage i
 	}
 	offset := (page - 1) * perPage
 
-	cacheKey := redisutil.CacheKey("events", "list", search, fmt.Sprintf("%d", page), fmt.Sprintf("%d", perPage))
-	if s.cache != nil {
-		var cached listEventsCache
-		if ok, _ := s.cache.GetJSON(ctx, cacheKey, &cached); ok {
-			return cached.Events, cached.Total, nil
-		}
-	}
-
-	events, err := s.queries.ListPublishedEvents(ctx, db.ListPublishedEventsParams{
-		Column1: search,
-		Limit:   int32(perPage),
-		Offset:  int32(offset),
-	})
+	events, err := s.queries.ListPublishedEventsFiltered(ctx, f.Search, f.CategorySlug, f.City, f.DateFrom, f.DateTo, f.PriceMin, f.PriceMax, int32(perPage), int32(offset))
 	if err != nil {
 		return nil, 0, err
 	}
+	total, err := s.queries.CountPublishedEventsFiltered(ctx, f.Search, f.CategorySlug, f.City, f.DateFrom, f.DateTo, f.PriceMin, f.PriceMax)
+	return events, total, err
+}
 
-	total, err := s.queries.CountPublishedEvents(ctx, search)
+func (s *Service) ListEvents(ctx context.Context, search string, page, perPage int) ([]db.ListPublishedEventsRow, int64, error) {
+	filtered, total, err := s.ListEventsFiltered(ctx, ListEventsFilter{Search: search, Page: page, PerPage: perPage})
 	if err != nil {
 		return nil, 0, err
 	}
-
-	if s.cache != nil && s.cfg != nil {
-		_ = s.cache.SetJSON(ctx, cacheKey, listEventsCache{Events: events, Total: total}, s.cfg.RedisCacheEventsTTL)
+	legacy := make([]db.ListPublishedEventsRow, 0, len(filtered))
+	for _, e := range filtered {
+		legacy = append(legacy, db.ListPublishedEventsRow{
+			ID: e.ID, Slug: e.Slug, Title: e.Title, Description: e.Description,
+			VenueID: e.VenueID, CoverImageUrl: e.CoverImageUrl, Status: e.Status,
+			StartsAt: e.StartsAt, EndsAt: e.EndsAt, CreatedAt: e.CreatedAt,
+			VenueName: e.VenueName, VenueCity: e.VenueCity,
+		})
 	}
-
-	return events, total, nil
+	return legacy, total, nil
 }
 
 func (s *Service) GetEventBySlug(ctx context.Context, slug string) (*db.Event, []db.TicketType, error) {
@@ -230,6 +237,12 @@ func (s *Service) CreateEvent(ctx context.Context, in CreateEventInput) (db.Even
 	if err != nil {
 		return db.Event{}, err
 	}
+	_ = s.queries.SetEventCategory(ctx, event.ID, in.CategoryID)
+	capacity := in.WaitingRoomCapacity
+	if capacity <= 0 {
+		capacity = 100
+	}
+	_ = s.queries.UpdateEventWaitingRoom(ctx, event.ID, in.WaitingRoomEnabled, capacity)
 	s.invalidateCaches(ctx, event.ID, event.Slug)
 	return event, nil
 }
@@ -264,6 +277,12 @@ func (s *Service) UpdateEvent(ctx context.Context, id uuid.UUID, in CreateEventI
 	if err != nil {
 		return db.Event{}, err
 	}
+	_ = s.queries.SetEventCategory(ctx, event.ID, in.CategoryID)
+	capacity := in.WaitingRoomCapacity
+	if capacity <= 0 {
+		capacity = 100
+	}
+	_ = s.queries.UpdateEventWaitingRoom(ctx, event.ID, in.WaitingRoomEnabled, capacity)
 	s.invalidateCaches(ctx, event.ID, event.Slug)
 	return event, nil
 }
@@ -290,6 +309,37 @@ func (s *Service) CreateTicketType(ctx context.Context, eventID uuid.UUID, in Cr
 		s.invalidateCaches(ctx, event.ID, event.Slug)
 	}
 	return tt, nil
+}
+
+func (s *Service) UpdateTicketType(ctx context.Context, ticketTypeID uuid.UUID, in CreateTicketTypeInput) (db.TicketType, error) {
+	maxPerOrder := in.MaxPerOrder
+	if maxPerOrder <= 0 {
+		maxPerOrder = 4
+	}
+	tt, err := s.queries.UpdateTicketType(ctx, ticketTypeID, in.Name, in.Price, in.TotalQuota, maxPerOrder, in.SalesStartAt, in.SalesEndAt)
+	if err != nil {
+		return db.TicketType{}, err
+	}
+	event, err := s.queries.GetEventByID(ctx, tt.EventID)
+	if err == nil {
+		s.invalidateCaches(ctx, event.ID, event.Slug)
+	}
+	return tt, nil
+}
+
+func (s *Service) DeleteTicketType(ctx context.Context, ticketTypeID uuid.UUID) error {
+	tt, err := s.queries.GetTicketTypeByID(ctx, ticketTypeID)
+	if err != nil {
+		return err
+	}
+	if err := s.queries.DeleteTicketType(ctx, ticketTypeID); err != nil {
+		return err
+	}
+	event, err := s.queries.GetEventByID(ctx, tt.EventID)
+	if err == nil {
+		s.invalidateCaches(ctx, event.ID, event.Slug)
+	}
+	return nil
 }
 
 func (s *Service) invalidateCaches(ctx context.Context, eventID uuid.UUID, slug string) {
@@ -351,7 +401,8 @@ func TicketTypeToMap(tt db.TicketType) map[string]interface{} {
 	if available < 0 {
 		available = 0
 	}
-	return map[string]interface{}{
+	label := ticketSaleLabel(tt)
+	m := map[string]interface{}{
 		"id":             tt.ID,
 		"event_id":       tt.EventID,
 		"name":           tt.Name,
@@ -363,7 +414,27 @@ func TicketTypeToMap(tt db.TicketType) map[string]interface{} {
 		"max_per_order":  tt.MaxPerOrder,
 		"sales_start_at": tt.SalesStartAt,
 		"sales_end_at":   tt.SalesEndAt,
+		"sale_status":    label,
 	}
+	if label == "early_bird" {
+		m["tier_label"] = "Early Bird"
+	}
+	return m
+}
+
+func ticketSaleLabel(tt db.TicketType) string {
+	now := time.Now()
+	if now.Before(tt.SalesStartAt) {
+		return "coming_soon"
+	}
+	if now.After(tt.SalesEndAt) {
+		return "ended"
+	}
+	name := strings.ToLower(tt.Name)
+	if strings.Contains(name, "early") || strings.Contains(name, "bird") {
+		return "early_bird"
+	}
+	return "on_sale"
 }
 
 func slugify(s string) string {

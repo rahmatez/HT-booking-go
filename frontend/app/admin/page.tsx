@@ -12,6 +12,7 @@ import {
   adminBookingStatusLabel,
   adminBookingStatusTone,
 } from "@/lib/admin-labels";
+import { DashboardTrendChart } from "@/components/admin/dashboard-trend-chart";
 import { api, AdminBooking, AdminStats, formatDate, formatIDR } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 
@@ -84,6 +85,8 @@ export default function AdminDashboardPage() {
           </div>
         )
       )}
+
+      <DashboardTrendChart />
 
       <section className="mt-10">
         <div className="mb-4 flex items-center justify-between gap-3">

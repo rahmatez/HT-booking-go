@@ -23,10 +23,20 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	search := q.Get("q")
+	category := q.Get("category")
+	city := q.Get("city")
+	dateFrom := q.Get("date_from")
+	dateTo := q.Get("date_to")
+	priceMin, _ := strconv.ParseInt(q.Get("price_min"), 10, 64)
+	priceMax, _ := strconv.ParseInt(q.Get("price_max"), 10, 64)
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("per_page"))
 
-	events, total, err := h.svc.ListEvents(r.Context(), search, page, perPage)
+	events, total, err := h.svc.ListEventsFiltered(r.Context(), ListEventsFilter{
+		Search: search, CategorySlug: category, City: city,
+		DateFrom: dateFrom, DateTo: dateTo, PriceMin: priceMin, PriceMax: priceMax,
+		Page: page, PerPage: perPage,
+	})
 	if err != nil {
 		response.Internal(w, "failed to list events")
 		return
@@ -34,29 +44,7 @@ func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]interface{}, 0, len(events))
 	for _, e := range events {
-		m := map[string]interface{}{
-			"id":          e.ID,
-			"slug":        e.Slug,
-			"title":       e.Title,
-			"description": e.Description,
-			"status":      e.Status,
-			"starts_at":   e.StartsAt,
-			"ends_at":     e.EndsAt,
-			"created_at":  e.CreatedAt,
-		}
-		if e.VenueID.Valid {
-			m["venue_id"] = uuid.UUID(e.VenueID.Bytes)
-		}
-		if e.CoverImageUrl.Valid {
-			m["cover_image_url"] = e.CoverImageUrl.String
-		}
-		if e.VenueName.Valid {
-			m["venue_name"] = e.VenueName.String
-		}
-		if e.VenueCity.Valid {
-			m["venue_city"] = e.VenueCity.String
-		}
-		items = append(items, m)
+		items = append(items, publishedEventToMap(e))
 	}
 
 	if perPage <= 0 {
@@ -71,6 +59,53 @@ func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
 		PerPage: perPage,
 		Total:   total,
 	})
+}
+
+func (h *Handler) Homepage(w http.ResponseWriter, r *http.Request) {
+	data, err := h.svc.GetHomepage(r.Context())
+	if err != nil {
+		response.Internal(w, "failed to load homepage")
+		return
+	}
+	banners := make([]map[string]interface{}, 0, len(data.Banners))
+	for _, b := range data.Banners {
+		m := map[string]interface{}{
+			"id": b.ID, "title": b.Title, "subtitle": b.Subtitle, "sort_order": b.SortOrder,
+		}
+		if b.ImageURL.Valid {
+			m["image_url"] = b.ImageURL.String
+		}
+		if b.LinkURL.Valid {
+			m["link_url"] = b.LinkURL.String
+		}
+		banners = append(banners, m)
+	}
+	categories := make([]map[string]interface{}, 0, len(data.Categories))
+	for _, c := range data.Categories {
+		categories = append(categories, map[string]interface{}{
+			"id": c.ID, "slug": c.Slug, "name": c.Name,
+		})
+	}
+	events := make([]map[string]interface{}, 0, len(data.Events))
+	for _, e := range data.Events {
+		events = append(events, publishedEventToMap(e))
+	}
+	response.OK(w, map[string]interface{}{
+		"banners": banners, "categories": categories, "events": events,
+	})
+}
+
+func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
+	cats, err := h.svc.ListCategories(r.Context())
+	if err != nil {
+		response.Internal(w, "failed to list categories")
+		return
+	}
+	items := make([]map[string]interface{}, 0, len(cats))
+	for _, c := range cats {
+		items = append(items, map[string]interface{}{"id": c.ID, "slug": c.Slug, "name": c.Name})
+	}
+	response.OK(w, items)
 }
 
 func (h *Handler) GetEvent(w http.ResponseWriter, r *http.Request) {

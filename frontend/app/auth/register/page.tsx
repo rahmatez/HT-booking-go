@@ -6,6 +6,7 @@ import { FormEvent, useState } from "react";
 import { api, ApiClientError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { AuthShell } from "@/components/auth/auth-shell";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -14,6 +15,8 @@ export default function RegisterPage() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const turnstileEnabled = Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -21,11 +24,16 @@ export default function RegisterPage() {
     setError("");
     const form = new FormData(e.currentTarget);
     try {
+      if (turnstileEnabled && !captchaToken) {
+        setError("Selesaikan verifikasi CAPTCHA");
+        return;
+      }
       const res = await api.register({
         email: String(form.get("email")),
         password: String(form.get("password")),
         full_name: String(form.get("full_name")),
         phone: String(form.get("phone") || ""),
+        ...(captchaToken ? { captcha_token: captchaToken } : {}),
       });
       setAuth(res.user, res.tokens);
       router.push("/events");
@@ -78,6 +86,7 @@ export default function RegisterPage() {
             {error}
           </div>
         )}
+        <TurnstileWidget onToken={setCaptchaToken} />
         <Button type="submit" disabled={loading} fullWidth size="lg">
           {loading ? "Memproses..." : "Daftar"}
         </Button>

@@ -46,5 +46,8 @@ test:
 test-integration:
 	cd backend && go test -v -count=1 ./internal/booking/... -run TestConcurrentHoldLastTicket
 
+test-load:
+	k6 run loadtests/k6/browse-events.js
+
 lint:
 	cd backend && golangci-lint run ./...
