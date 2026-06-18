@@ -39,7 +39,7 @@ export function AdminSidebar({ open = false, onNavigate }: Props) {
         </p>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 [scrollbar-color:rgb(228_231_236)_transparent] [scrollbar-width:thin]">
+      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 scrollbar-thin [scrollbar-color:rgb(228_231_236)_transparent]">
         {sections.map((section) => (
           <div key={section.title} className="mb-6">
             <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-gray-400">
