@@ -24,10 +24,10 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   if (!hydrated) {
     return (
       <div
-        className="flex min-h-screen flex-col items-center justify-center gap-3 bg-stone-100 text-stone-500"
+        className="flex min-h-screen flex-col items-center justify-center gap-3 bg-gray-50 text-gray-500"
         data-shell="admin"
       >
-        <Spinner className="h-6 w-6" />
+        <Spinner className="h-6 w-6 border-gray-200 border-t-brand-500" />
         <span className="text-sm">Memuat panel admin...</span>
       </div>
     );
@@ -36,10 +36,10 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   if (!accessToken) {
     return (
       <div
-        className="flex min-h-screen flex-col items-center justify-center gap-3 bg-stone-100 text-stone-500"
+        className="flex min-h-screen flex-col items-center justify-center gap-3 bg-gray-50 text-gray-500"
         data-shell="admin"
       >
-        <Spinner className="h-6 w-6" />
+        <Spinner className="h-6 w-6 border-gray-200 border-t-brand-500" />
         <span className="text-sm">Mengalihkan ke login...</span>
       </div>
     );
@@ -48,8 +48,8 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   if (user?.role === "gate_staff" && !pathname.startsWith("/admin/check-in")) {
     router.replace("/admin/check-in");
     return (
-      <div className="flex min-h-screen items-center justify-center bg-stone-100 text-stone-500">
-        <Spinner className="h-6 w-6" />
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-500" data-shell="admin">
+        <Spinner className="h-6 w-6 border-gray-200 border-t-brand-500" />
       </div>
     );
   }
@@ -57,14 +57,15 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   if (!isAdminRole(user?.role)) {
     return (
       <div
-        className="flex min-h-screen flex-col items-center justify-center gap-4 bg-stone-100 px-6 text-center"
+        className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gray-50 px-6 text-center"
         data-shell="admin"
       >
-        <p className="text-lg font-semibold text-stone-800">Akses ditolak</p>
-        <p className="max-w-sm text-sm text-stone-500">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-error-50 text-2xl text-error-500">🔒</div>
+        <p className="text-lg font-semibold text-gray-800">Akses ditolak</p>
+        <p className="max-w-sm text-sm text-gray-500">
           Akun Anda tidak memiliki izin untuk mengakses panel admin.
         </p>
-        <Link href="/" className="text-sm font-medium text-(--accent) hover:underline">
+        <Link href="/" className="text-sm font-medium text-brand-500 hover:underline">
           Kembali ke beranda
         </Link>
       </div>

@@ -16,11 +16,14 @@ type Props = {
   banners: HeroBanner[];
 };
 
+const HERO_BG = "/images/hero-home.png";
+
 const defaultSlides: HeroBanner[] = [
   {
     id: "default",
     title: "Beli Tiket Event & Konser dengan Mudah",
     subtitle: "Konser, festival, workshop — aman, cepat, dan terpercaya.",
+    image_url: HERO_BG,
     link_url: "/events",
   },
 ];
@@ -42,7 +45,7 @@ export function HeroCarousel({ banners }: Props) {
   const slide = slides[active];
 
   return (
-    <section className="relative overflow-hidden bg-slate-900">
+    <section className="relative overflow-hidden bg-slate-950">
       {/* Background layers for crossfade */}
       {slides.map((s, i) => (
         <div
@@ -54,13 +57,15 @@ export function HeroCarousel({ banners }: Props) {
         >
           {s.image_url ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={s.image_url} alt="" className="h-full w-full object-cover" />
+            <img src={s.image_url} alt="" className="h-full w-full object-cover object-center" />
           ) : (
-            <div className="h-full w-full bg-linear-to-br from-[#003080] via-[#0057d9] to-[#0096c7]" />
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={HERO_BG} alt="" className="h-full w-full object-cover object-center" />
           )}
         </div>
       ))}
-      <div className="absolute inset-0 bg-linear-to-r from-slate-900/85 via-slate-900/50 to-slate-900/20" />
+      <div className="absolute inset-0 bg-linear-to-r from-slate-950/90 via-slate-900/55 to-slate-900/25" />
+      <div className="absolute inset-0 bg-linear-to-t from-slate-950/60 via-transparent to-transparent" />
 
       <div className="relative mx-auto flex min-h-[260px] max-w-7xl items-center px-4 py-10 sm:min-h-[320px] sm:px-6 sm:py-14 lg:min-h-[380px]">
         <div key={slide.id} className="max-w-xl animate-fade-up">

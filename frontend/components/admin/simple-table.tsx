@@ -16,20 +16,23 @@ export function SimpleTable({ headers, rows, emptyTitle = "Tidak ada data", empt
   return (
     <DataTable>
       <table className="w-full min-w-[640px] text-left text-sm">
-        <thead className="border-b border-(--border) bg-stone-50/80">
-          <tr>
+        <thead>
+          <tr className="border-b border-gray-100 bg-gray-50">
             {headers.map((h) => (
-              <th key={h} className="px-4 py-3 font-semibold text-stone-600">
+              <th
+                key={h}
+                className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wide text-gray-500"
+              >
                 {h}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-gray-100">
           {rows.map((row, i) => (
-            <tr key={i} className="border-b border-(--border) last:border-0 hover:bg-stone-50/60">
+            <tr key={i} className="transition hover:bg-brand-50/40">
               {row.map((cell, j) => (
-                <td key={j} className="px-4 py-3.5 text-stone-700">
+                <td key={j} className="px-5 py-4 text-gray-700">
                   {cell}
                 </td>
               ))}

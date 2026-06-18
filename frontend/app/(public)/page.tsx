@@ -1,12 +1,27 @@
 import Link from "next/link";
+import type { IconType } from "react-icons";
+import {
+  HiOutlineBolt,
+  HiOutlineDevicePhoneMobile,
+  HiOutlineLockClosed,
+  HiOutlineTicket,
+} from "react-icons/hi2";
 import { EventCard } from "@/components/event-card";
 import { CategoryPills } from "@/components/public/category-pills";
 import { EventScrollRow } from "@/components/public/event-scroll-row";
 import { EventSearchForm } from "@/components/public/event-search-form";
 import { HeroCarousel } from "@/components/public/hero-carousel";
+import { EmptyEventsIcon } from "@/components/public/public-icons";
 import { SectionHeader } from "@/components/public/section-header";
 import { Container } from "@/components/ui/container";
 import { api } from "@/lib/api";
+
+const features: { Icon: IconType; title: string; desc: string }[] = [
+  { Icon: HiOutlineTicket, title: "E-Ticket Instan", desc: "Langsung setelah bayar" },
+  { Icon: HiOutlineLockClosed, title: "Pembayaran Aman", desc: "Midtrans terenkripsi" },
+  { Icon: HiOutlineBolt, title: "Antrean Cerdas", desc: "Siap traffic tinggi" },
+  { Icon: HiOutlineDevicePhoneMobile, title: "Check-in QR", desc: "Tanpa antre panjang" },
+];
 
 export default async function HomePage() {
   let banners: Awaited<ReturnType<typeof api.getHomepage>>["banners"] = [];
@@ -54,17 +69,14 @@ export default async function HomePage() {
       <section className="border-b border-(--border) bg-white py-5">
         <Container wide>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {[
-              { icon: "🎫", title: "E-Ticket Instan", desc: "Langsung setelah bayar" },
-              { icon: "🔒", title: "Pembayaran Aman", desc: "Midtrans terenkripsi" },
-              { icon: "⚡", title: "Antrean Cerdas", desc: "Siap traffic tinggi" },
-              { icon: "📱", title: "Check-in QR", desc: "Tanpa antre panjang" },
-            ].map((item) => (
+            {features.map((item) => (
               <div
                 key={item.title}
                 className="flex items-start gap-3 rounded-lg border border-(--border) bg-slate-50/80 px-4 py-3"
               >
-                <span className="text-xl leading-none">{item.icon}</span>
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-(--accent-soft) text-(--accent)">
+                  <item.Icon className="h-5 w-5" aria-hidden />
+                </span>
                 <div>
                   <p className="text-sm font-semibold text-slate-800">{item.title}</p>
                   <p className="mt-0.5 text-xs text-slate-500">{item.desc}</p>
@@ -138,7 +150,9 @@ export default async function HomePage() {
         <section className="pb-16">
           <Container wide>
             <div className="rounded-lg border border-dashed border-slate-300 bg-white px-8 py-16 text-center">
-              <p className="text-4xl">🎪</p>
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-(--accent-soft) text-(--accent)">
+                <EmptyEventsIcon className="h-7 w-7" aria-hidden />
+              </div>
               <p className="mt-4 text-lg font-semibold text-slate-800">Belum ada event tersedia</p>
               <p className="mt-2 text-sm text-slate-500">Cek kembali nanti untuk event seru berikutnya.</p>
               <Link

@@ -22,8 +22,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="id" className={`${jakarta.variable} h-full`}>
-      <body className="min-h-full antialiased">
+    <html
+      lang="id"
+      className={`${jakarta.variable} h-full`}
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+    >
+      <body className="min-h-full antialiased" suppressHydrationWarning>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

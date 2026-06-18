@@ -1,32 +1,11 @@
 import Link from "next/link";
+import { AllCategoriesIcon, getCategoryIcon } from "@/components/public/public-icons";
 
 export type Category = {
   id: string;
   slug: string;
   name: string;
 };
-
-const categoryIcons: Record<string, string> = {
-  musik: "🎵",
-  music: "🎵",
-  konser: "🎤",
-  festival: "🎪",
-  olahraga: "⚽",
-  sports: "⚽",
-  workshop: "💡",
-  seminar: "📚",
-  teater: "🎭",
-  komedi: "😂",
-  default: "🎫",
-};
-
-function iconFor(slug: string) {
-  const key = slug.toLowerCase();
-  for (const [k, icon] of Object.entries(categoryIcons)) {
-    if (key.includes(k)) return icon;
-  }
-  return categoryIcons.default;
-}
 
 type Props = {
   categories: Category[];
@@ -49,7 +28,7 @@ export function CategoryPills({ categories, activeSlug, baseHref = "/events" }: 
                 : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
           >
-            <span>✨</span>
+            <AllCategoriesIcon className="h-4 w-4 shrink-0" aria-hidden />
             Semua
           </Link>
           {categories.map((cat) => {
@@ -58,6 +37,7 @@ export function CategoryPills({ categories, activeSlug, baseHref = "/events" }: 
                 ? `/events?category=${cat.slug}`
                 : `${baseHref}&category=${cat.slug}`;
             const active = activeSlug === cat.slug;
+            const Icon = getCategoryIcon(cat.slug);
             return (
               <Link
                 key={cat.id}
@@ -68,7 +48,7 @@ export function CategoryPills({ categories, activeSlug, baseHref = "/events" }: 
                     : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                 }`}
               >
-                <span>{iconFor(cat.slug)}</span>
+                <Icon className="h-4 w-4 shrink-0" aria-hidden />
                 {cat.name}
               </Link>
             );

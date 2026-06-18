@@ -11,16 +11,16 @@ type Props = {
 
 export function FilterTabs({ options, value, onChange }: Props) {
   return (
-    <div className="mb-5 flex flex-wrap gap-2">
+    <div className="mb-5 inline-flex flex-wrap gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
       {options.map((opt) => (
         <button
           key={opt.value || "all"}
           type="button"
           onClick={() => onChange(opt.value)}
-          className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+          className={`rounded-md px-3.5 py-1.5 text-sm font-medium transition-all ${
             value === opt.value
-              ? "bg-(--accent) text-white shadow-sm"
-              : "border border-(--border-strong) bg-white text-stone-600 hover:bg-stone-50"
+              ? "bg-white text-brand-500 shadow-sm"
+              : "text-gray-600 hover:text-gray-900"
           }`}
         >
           {opt.label}

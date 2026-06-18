@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { HiOutlineCheckCircle } from "react-icons/hi2";
 import { Container } from "@/components/ui/container";
 import { BRAND_NAME } from "@/lib/brand";
 
@@ -30,15 +31,16 @@ export function AuthShell({
             yang cepat bahkan saat antrean panjang.
           </p>
           <ul className="mt-10 space-y-3 text-sm text-stone-300">
-            <li className="flex items-center gap-2">
-              <span className="text-orange-400">✓</span> Hold tiket 10 menit
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="text-orange-400">✓</span> Pembayaran aman
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="text-orange-400">✓</span> E-ticket langsung setelah bayar
-            </li>
+            {[
+              "Hold tiket 10 menit",
+              "Pembayaran aman",
+              "E-ticket langsung setelah bayar",
+            ].map((text) => (
+              <li key={text} className="flex items-center gap-2">
+                <HiOutlineCheckCircle className="h-5 w-5 shrink-0 text-orange-400" aria-hidden />
+                {text}
+              </li>
+            ))}
           </ul>
         </Container>
         <p className="relative z-10 px-6 pb-8 text-xs text-stone-500">

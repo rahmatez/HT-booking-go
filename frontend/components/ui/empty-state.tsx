@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { HiOutlineTicket } from "react-icons/hi2";
 import { Button } from "./button";
 
 export function EmptyState({
@@ -14,8 +15,8 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center rounded-2xl border border-dashed border-stone-300 bg-white px-8 py-14 text-center">
-      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-100 text-2xl">
-        🎫
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-(--accent-soft) text-(--accent)">
+        <HiOutlineTicket className="h-7 w-7" aria-hidden />
       </div>
       <h3 className="text-lg font-semibold text-stone-900">{title}</h3>
       {description && (
